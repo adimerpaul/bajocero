@@ -1,0 +1,1 @@
+import{b as e}from"./QIcon-DJiChd94.js";var t=`_q_l_`,n=`_q_pc_`,r=`_q_fo_`;function i(){}var a={dark:{type:Boolean,default:null}};function o(t,n){return e(()=>t.dark===null?n.dark.isActive:t.dark)}export{t as a,r as i,a as n,n as o,i as r,o as t};
