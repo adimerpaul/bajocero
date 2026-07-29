@@ -1,5 +1,6 @@
 <template>
   <q-page class="q-pa-sm">
+    <CompanyBanner class="q-mb-sm"/>
     <div class="row items-center q-mb-sm">
       <div><div class="text-subtitle1 text-weight-bold">Nueva venta</div><div class="text-caption text-grey-7">Selecciona productos y confirma el carrito</div></div>
       <q-space/><q-btn dense flat icon="receipt_long" label="Ver ventas" no-caps to="/ventas"/>
@@ -8,7 +9,7 @@
       <div class="col-12 col-md-8">
         <q-card flat bordered>
           <q-card-section class="row q-col-gutter-sm q-pa-sm">
-            <q-input ref="searchInput" v-model="search" dense outlined autofocus clearable debounce="250" class="col" placeholder="Buscar nombre, código o escanear código de barras" @update:model-value="loadProducts" @keyup.enter="addExact">
+            <q-input ref="searchInput" v-model="search" dense outlined autofocus clearable debounce="250" class="col" placeholder="Buscar nombre, código o escanear etiqueta de balanza" @update:model-value="loadProducts" @keydown.enter.prevent="addExact">
               <template #prepend><q-icon name="qr_code_scanner"/></template>
             </q-input>
             <q-select v-model="category" :options="categories" option-label="nombre" dense outlined clearable label="Categoría" style="min-width:170px" @update:model-value="loadProducts"/>
@@ -19,7 +20,7 @@
               <div class="product-image"><img v-if="product.foto" :src="photoUrl(product.foto)"/><q-icon v-else name="inventory_2" size="42px" color="grey-4"/></div>
               <q-card-section class="q-pa-xs">
                 <div class="text-caption text-weight-bold ellipsis-2-lines product-name">{{product.nombre}}</div>
-                <div class="row items-center"><span class="text-primary text-weight-bold">Bs {{money(product.precio_venta)}}</span><q-space/><q-badge :color="product.stock_inicial>0?'positive':'negative'" :label="`Stock ${product.stock_inicial}`"/></div>
+                <div class="row items-center"><span class="text-primary text-weight-bold">Bs {{money(product.precio_venta)}}{{product.unidad==='KG'?'/kg':''}}</span><q-space/><q-badge :color="product.stock_inicial>0?'positive':'negative'" :label="`Stock ${quantity(product.stock_inicial,product.unidad)} ${product.unidad}`"/></div>
               </q-card-section>
             </q-card>
           </q-card-section>
@@ -33,8 +34,8 @@
           <q-list v-if="cart.length" separator class="cart-list">
             <q-item v-for="item in cart" :key="item.id" dense class="q-px-sm">
               <q-item-section avatar><q-avatar rounded size="34px" color="grey-2"><img v-if="item.foto" :src="photoUrl(item.foto)"/><q-icon v-else name="inventory_2"/></q-avatar></q-item-section>
-              <q-item-section><q-item-label lines="1" class="text-caption text-weight-medium">{{item.nombre}}</q-item-label><label class="price-label">Cantidad <input v-model.number="item.cantidad" class="qty-input" type="number" min="1" :max="item.stock_inicial" step="1" @blur="validateQty(item)"></label><label class="price-label">Precio Bs <input v-model.number="item.precio_venta" class="price-input" type="number" min="0" step="0.0001" @blur="syncLineTotal(item)"></label></q-item-section>
-              <q-item-section side><div class="row items-center no-wrap"><q-btn dense flat round size="sm" icon="remove" @click="changeQty(item,-1)"/><q-btn dense flat round size="sm" icon="add" @click="changeQty(item,1)"/><q-btn dense flat round size="sm" icon="delete" color="negative" @click="removeItem(item)"/></div><label class="total-label">Total Bs <input v-model.number="item.total_editable" class="total-input" type="number" min="0" step="0.01" @keyup.enter="$event.target.blur()" @blur="applyLineTotal(item)"></label></q-item-section>
+              <q-item-section><q-item-label lines="1" class="text-caption text-weight-medium">{{item.nombre}}</q-item-label><label class="price-label">Cantidad ({{item.unidad}}) <input v-model.number="item.cantidad" class="qty-input" type="number" :min="minimumQty(item)" :max="item.stock_inicial" :step="quantityStep(item)" @blur="validateQty(item)"></label><label class="price-label">Precio Bs {{item.unidad==='KG'?'/ kg':''}} <input v-model.number="item.precio_venta" class="price-input" type="number" min="0" step="0.0001" @blur="syncLineTotal(item)"></label></q-item-section>
+              <q-item-section side><div class="row items-center no-wrap"><q-btn dense flat round size="sm" icon="remove" @click="changeQty(item,-quantityStep(item))"/><q-btn dense flat round size="sm" icon="add" @click="changeQty(item,quantityStep(item))"/><q-btn dense flat round size="sm" icon="delete" color="negative" @click="removeItem(item)"/></div><label class="total-label">Total Bs <input v-model.number="item.total_editable" class="total-input" type="number" min="0" step="0.01" @keyup.enter="$event.target.blur()" @blur="applyLineTotal(item)"></label></q-item-section>
             </q-item>
           </q-list>
           <q-card-section v-else class="text-center text-grey-6 q-py-xl"><q-icon name="remove_shopping_cart" size="42px"/><div>Agrega productos</div></q-card-section>
@@ -63,23 +64,28 @@
 <script setup>
 import { computed, getCurrentInstance, onMounted, ref, watch } from 'vue'
 import { printSale } from '../../addons/ventaPrint'
+import CompanyBanner from '../../components/CompanyBanner.vue'
 const {proxy}=getCurrentInstance()
 const products=ref([]),categories=ref([]),cart=ref([]),search=ref(''),category=ref(null),discount=ref(0),observation=ref(''),saving=ref(false),searchInput=ref(null)
 const paymentType=ref('EFECTIVO'),paymentTypes=['EFECTIVO','QR','COMBINADO'],cashAmount=ref(0),qrAmount=ref(0)
 const photoUrl=path=>`${proxy.$imgBase}/images/${path}`,money=v=>Number(v||0).toFixed(2)
+const isWeighted=item=>item?.unidad==='KG',quantityStep=item=>isWeighted(item)?0.001:1,minimumQty=item=>quantityStep(item)
+const quantity=(value,unit)=>Number(value||0).toFixed(unit==='KG'?3:0)
 const subtotal=computed(()=>cart.value.reduce((sum,i)=>sum+Number(i.precio_venta)*i.cantidad,0))
 const validDiscount=computed(()=>Math.min(Math.max(Number(discount.value)||0,0),subtotal.value))
 const total=computed(()=>subtotal.value-validDiscount.value)
-const itemCount=computed(()=>cart.value.reduce((sum,i)=>sum+i.cantidad,0))
+const itemCount=computed(()=>cart.value.length)
 const paymentDifference=computed(()=>Number((total.value-(Number(cashAmount.value)||0)-(Number(qrAmount.value)||0)).toFixed(2)))
 watch([paymentType,total],()=>{if(paymentType.value==='EFECTIVO'){cashAmount.value=total.value;qrAmount.value=0}else if(paymentType.value==='QR'){cashAmount.value=0;qrAmount.value=total.value}else if(Number(cashAmount.value)+Number(qrAmount.value)===0){cashAmount.value=total.value;qrAmount.value=0}})
 function loadProducts(){proxy.$axios.get('/productos',{params:{q:search.value,categoria_id:category.value?.id,per_page:0}}).then(r=>products.value=r.data.data)}
-function add(product){if(product.stock_inicial<=0)return proxy.$alert.error('Producto sin stock');const item=cart.value.find(i=>i.id===product.id);if(item){if(item.cantidad>=product.stock_inicial)return proxy.$alert.error('No hay más stock');item.cantidad++;syncLineTotal(item)}else cart.value.push({...product,cantidad:1,total_editable:Number(product.precio_venta).toFixed(2)})}
-function addExact(){const q=(search.value||'').trim().toUpperCase();const product=products.value.find(p=>p.codigo?.toUpperCase()===q||p.codigo_barras?.toUpperCase()===q);if(product){add(product);search.value='';loadProducts()}}
-function changeQty(item,amount){const next=item.cantidad+amount;if(next<=0)return removeItem(item);if(next>item.stock_inicial)return proxy.$alert.error('Stock insuficiente');item.cantidad=next;syncLineTotal(item)}
-function validateQty(item){const value=Math.floor(Number(item.cantidad)||1);if(value>item.stock_inicial){item.cantidad=item.stock_inicial;proxy.$alert.error('La cantidad fue ajustada al stock disponible')}else item.cantidad=Math.max(1,value);syncLineTotal(item)}
+function add(product,amount=null){const requested=Number(amount??quantityStep(product));if(Number(product.stock_inicial)<=0)return proxy.$alert.error(`${product.nombre}: stock 0. Registra primero una compra para cargar existencias.`);const item=cart.value.find(i=>i.id===product.id);const next=Number(((item?.cantidad||0)+requested).toFixed(3));if(next>Number(product.stock_inicial)+.0001)return proxy.$alert.error(`Stock insuficiente: disponible ${quantity(product.stock_inicial,product.unidad)} ${product.unidad}`);if(item){item.cantidad=next;syncLineTotal(item)}else cart.value.push({...product,cantidad:requested,total_editable:(Number(product.precio_venta)*requested).toFixed(2)});if(amount!==null)proxy.$alert.success(`${product.nombre}: ${quantity(requested,product.unidad)} ${product.unidad} leído correctamente`)}
+function parseScaleBarcode(value){const code=String(value||'').trim();if(!/^2\\d{12}$/.test(code))return null;const expected=ean13CheckDigit(code.slice(0,12));if(expected!==Number(code[12]))return null;return{productCode:code.slice(0,7),weight:Number(code.slice(7,12))/1000}}
+function ean13CheckDigit(firstTwelve){const sum=[...firstTwelve].reduce((total,digit,index)=>total+Number(digit)*(index%2===0?1:3),0);return(10-(sum%10))%10}
+async function addExact(){const q=(search.value||'').trim().toUpperCase();const scale=parseScaleBarcode(q);if(scale){try{const {data}=await proxy.$axios.get('/productos',{params:{q:scale.productCode,per_page:0}});const product=data.data.find(p=>p.codigo===scale.productCode||p.codigo_barras===scale.productCode);if(!product)return proxy.$alert.error(`No existe un producto con código de balanza ${scale.productCode}`);if(product.unidad!=='KG')return proxy.$alert.error(`${product.nombre} debe tener unidad KG`);add(product,scale.weight);search.value='';loadProducts();return}catch(e){return proxy.$alert.error(e.response?.data?.message||'No se pudo leer la etiqueta de balanza')}}const product=products.value.find(p=>p.codigo?.toUpperCase()===q||p.codigo_barras?.toUpperCase()===q);if(product){add(product,isWeighted(product)?null:1);search.value='';loadProducts()}}
+function changeQty(item,amount){const next=Number((Number(item.cantidad)+amount).toFixed(3));if(next<minimumQty(item))return removeItem(item);if(next>Number(item.stock_inicial)+.0001)return proxy.$alert.error('Stock insuficiente');item.cantidad=next;syncLineTotal(item)}
+function validateQty(item){let value=Number(item.cantidad)||minimumQty(item);value=isWeighted(item)?Math.round(value*1000)/1000:Math.floor(value);if(value>Number(item.stock_inicial)){item.cantidad=Number(item.stock_inicial);proxy.$alert.error('La cantidad fue ajustada al stock disponible')}else item.cantidad=Math.max(minimumQty(item),value);syncLineTotal(item)}
 function syncLineTotal(item){item.total_editable=(Number(item.precio_venta||0)*Number(item.cantidad||0)).toFixed(2)}
-function applyLineTotal(item){const totalValue=Math.max(0,Number(item.total_editable)||0),quantity=Math.max(1,Number(item.cantidad)||1);item.total_editable=totalValue.toFixed(2);item.precio_venta=Number((totalValue/quantity).toFixed(4))}
+function applyLineTotal(item){const totalValue=Math.max(0,Number(item.total_editable)||0),lineQuantity=Math.max(minimumQty(item),Number(item.cantidad)||minimumQty(item));item.total_editable=totalValue.toFixed(2);item.precio_venta=Number((totalValue/lineQuantity).toFixed(4))}
 function removeItem(item){cart.value=cart.value.filter(i=>i.id!==item.id)}
 function confirmSale(){cart.value.forEach(item=>{const requestedTotal=item.total_editable;validateQty(item);item.total_editable=requestedTotal;applyLineTotal(item)});if(cart.value.some(i=>Number(i.precio_venta)<0||i.precio_venta===''))return proxy.$alert.error('Revisa los precios de venta');if(paymentType.value==='COMBINADO'&&paymentDifference.value!==0)return proxy.$alert.error('Efectivo y QR deben sumar el total');proxy.$alert.dialog(`¿Confirmar venta por Bs ${money(total.value)}?`).onOk(async()=>{saving.value=true;try{const {data}=await proxy.$axios.post('/ventas',{descuento:validDiscount.value,tipo_pago:paymentType.value,monto_efectivo:cashAmount.value,monto_qr:qrAmount.value,observacion:observation.value,detalles:cart.value.map(i=>({producto_id:i.id,cantidad:i.cantidad,precio_venta:i.precio_venta}))});proxy.$alert.success(`Venta ${data.numero} registrada`);printSale(data);cart.value=[];discount.value=0;observation.value='';paymentType.value='EFECTIVO';loadProducts();searchInput.value?.focus()}catch(e){proxy.$alert.error(Object.values(e.response?.data?.errors||{})[0]?.[0]||e.response?.data?.message||'No se pudo registrar la venta')}finally{saving.value=false}})}
 onMounted(()=>{loadProducts();proxy.$axios.get('/productos-catalogos').then(r=>categories.value=r.data.categorias)})

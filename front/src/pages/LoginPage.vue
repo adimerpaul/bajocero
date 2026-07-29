@@ -8,9 +8,9 @@
           <q-card flat bordered class="login-card">
 
             <q-card-section class="q-pt-lg text-center">
-              <img src="/bajo-cero-logo.svg" alt="Bajo Cero" class="login-logo q-mb-sm" />
+              <img :src="companyLogo" :alt="companyName" class="login-logo q-mb-sm" />
               <div class="text-subtitle2 text-grey-7">
-                <b>Bajo Cero</b> · Ventas e inventario
+                <b>{{ companyName }}</b> · Ventas e inventario
               </div>
             </q-card-section>
 
@@ -50,7 +50,7 @@
               <q-card-section class="q-pt-none text-center">
                 <q-separator spaced />
                 <div class="text-caption text-grey-6">
-                  © {{ year }} Bajo Cero. Todos los derechos reservados.
+                  © {{ year }} {{ companyName }}. Todos los derechos reservados.
                 </div>
               </q-card-section>
             </template>
@@ -107,7 +107,7 @@
 </template>
 
 <script setup>
-import { ref, computed, getCurrentInstance } from 'vue'
+import { ref, computed, getCurrentInstance, onMounted } from 'vue'
 
 const { proxy } = getCurrentInstance()
 
@@ -125,6 +125,18 @@ const loadingChange          = ref(false)
 let   tempToken              = ''
 
 const year = computed(() => new Date().getFullYear())
+const cachedCompany = JSON.parse(localStorage.getItem('empresaBajoCero') || '{}')
+const companyName = ref(cachedCompany.nombre_empresa || 'Bajo Cero')
+const companyLogo = ref(cachedCompany.logo_url || '/bajo-cero-logo.svg')
+
+onMounted(() => {
+  proxy.$axios.get('/configuracion').then(({ data }) => {
+    data.logo_url = data.logo ? `${proxy.$imgBase}/images/${data.logo}` : null
+    companyName.value = data.nombre_empresa || 'Bajo Cero'
+    companyLogo.value = data.logo_url || '/bajo-cero-logo.svg'
+    localStorage.setItem('empresaBajoCero', JSON.stringify(data))
+  })
+})
 
 function login () {
   loading.value = true

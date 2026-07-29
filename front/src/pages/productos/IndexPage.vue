@@ -67,8 +67,8 @@
                      outlined dense label="Precio compra *" prefix="Bs" class="col-12 col-sm-4" :rules="[nonNegative]" />
             <q-input v-model.number="form.precio_venta" type="number" step="0.01" min="0"
                      outlined dense label="Precio venta *" prefix="Bs" class="col-12 col-sm-4" :rules="[nonNegative]" />
-            <q-input v-model.number="form.stock_inicial" type="number" min="0"
-                     outlined dense label="Stock inicial *" class="col-12 col-sm-4" :rules="[nonNegative]" />
+            <q-input v-model.number="form.stock_inicial" type="number" min="0" :step="form.unidad==='KG'?0.001:1"
+                     outlined dense :label="form.unidad==='KG'?'Stock inicial (kg) *':'Stock inicial *'" class="col-12 col-sm-4" :rules="[nonNegative]" />
             </div>
           </q-card-section>
           <q-card-actions align="right">

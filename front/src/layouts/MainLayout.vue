@@ -14,7 +14,7 @@
         />
         <div class="row items-center q-gutter-sm">
           <div class="text-subtitle1 text-weight-medium" style="line-height: 0.9">
-            Bajo Cero
+            {{ companyName }}
           </div>
         </div>
 
@@ -63,10 +63,10 @@
         <div class="drawer-shell">
           <div class="drawer-brand">
             <div class="drawer-brand__logo">
-              <img src="/bajo-cero-logo.svg" alt="Bajo Cero" />
+              <img :src="companyLogo" :alt="companyName" />
             </div>
             <div class="drawer-brand__text">
-              <div class="drawer-brand__title">Bajo Cero</div>
+              <div class="drawer-brand__title">{{ companyName }}</div>
               <div class="drawer-brand__caption">Ventas de pollo y alimentos</div>
             </div>
           </div>
@@ -118,11 +118,14 @@
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, ref } from 'vue'
+import { computed, getCurrentInstance, onMounted, ref } from 'vue'
 
 const { proxy } = getCurrentInstance()
 
 const leftDrawerOpen = ref(false)
+const cachedCompany = JSON.parse(localStorage.getItem('empresaBajoCero') || '{}')
+const companyName = ref(cachedCompany.nombre_empresa || 'Bajo Cero')
+const companyLogo = ref(cachedCompany.logo_url || '/bajo-cero-logo.svg')
 
 const links = [
   { title: 'Inicio',    icon: 'dashboard',   link: '/',         can: null },
@@ -130,6 +133,12 @@ const links = [
   { title: 'Productos', icon: 'inventory_2', link: '/productos', can: 'Ver Productos' },
   { title: 'Nueva venta', icon: 'point_of_sale', link: '/ventas/nueva', can: 'Crear Ventas' },
   { title: 'Ventas', icon: 'receipt_long', link: '/ventas', can: 'Ver Ventas' },
+  { title: 'Nueva compra', icon: 'add_business', link: '/compras/nueva', can: 'Crear Compras' },
+  { title: 'Compras', icon: 'shopping_bag', link: '/compras', can: 'Ver Compras' },
+  { title: 'Proveedores', icon: 'groups', link: '/proveedores', can: 'Ver Compras' },
+  { title: 'Por vencer', icon: 'schedule', link: '/productos/por-vencer', can: 'Ver Compras' },
+  { title: 'Vencidos', icon: 'event_busy', link: '/productos/vencidos', can: 'Ver Compras' },
+  { title: 'Configuración', icon: 'settings', link: '/configuracion', can: 'Gestionar Configuración' },
 ]
 
 const visibleLinks = computed(() =>
@@ -139,6 +148,15 @@ const visibleLinks = computed(() =>
 function toggleLeftDrawer () {
   leftDrawerOpen.value = !leftDrawerOpen.value
 }
+
+onMounted(() => {
+  proxy.$axios.get('/configuracion').then(({ data }) => {
+    data.logo_url = data.logo ? `${proxy.$imgBase}/images/${data.logo}` : null
+    companyName.value = data.nombre_empresa || 'Bajo Cero'
+    companyLogo.value = data.logo_url || '/bajo-cero-logo.svg'
+    localStorage.setItem('empresaBajoCero', JSON.stringify(data))
+  })
+})
 
 function logout () {
   proxy.$alert.dialog('¿Desea salir del sistema?').onOk(() => {

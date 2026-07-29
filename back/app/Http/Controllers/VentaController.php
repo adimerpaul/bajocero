@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Exports\VentasExport;
 use App\Models\Producto;
+use App\Models\Lote;
 use App\Models\User;
 use App\Models\Venta;
 use Barryvdh\DomPDF\Facade\Pdf;
@@ -44,7 +45,7 @@ class VentaController extends Controller
         $sales = Venta::where('estado', 'COMPLETADA');
         $total = (float) (clone $sales)->sum('total');
         $count = (clone $sales)->count();
-        $items = (int) DB::table('venta_detalles')
+        $items = (float) DB::table('venta_detalles')
             ->join('ventas', 'ventas.id', '=', 'venta_detalles.venta_id')
             ->where('ventas.estado', 'COMPLETADA')
             ->whereNull('ventas.deleted_at')->whereNull('venta_detalles.deleted_at')
@@ -116,7 +117,7 @@ class VentaController extends Controller
             'observacion' => ['nullable', 'string', 'max:1000'],
             'detalles' => ['required', 'array', 'min:1'],
             'detalles.*.producto_id' => ['required', 'integer', 'exists:productos,id'],
-            'detalles.*.cantidad' => ['required', 'integer', 'min:1'],
+            'detalles.*.cantidad' => ['required', 'numeric', 'min:0.001', 'decimal:0,3'],
             'detalles.*.precio_venta' => ['required', 'numeric', 'min:0'],
         ]);
 
@@ -125,11 +126,12 @@ class VentaController extends Controller
             $subtotal = 0;
             foreach ($data['detalles'] as $detail) {
                 $product = Producto::lockForUpdate()->findOrFail($detail['producto_id']);
-                abort_if($product->stock_inicial < $detail['cantidad'], 422, "Stock insuficiente para {$product->nombre}");
+                $quantity = round((float) $detail['cantidad'], 3);
+                abort_if((float) $product->stock_inicial + 0.0001 < $quantity, 422, "Stock insuficiente para {$product->nombre}");
                 $salePrice = round((float) $detail['precio_venta'], 4);
-                $lineSubtotal = round($salePrice * $detail['cantidad'], 2);
+                $lineSubtotal = round($salePrice * $quantity, 2);
                 $subtotal += $lineSubtotal;
-                $items[] = [$product, $detail['cantidad'], $salePrice, $lineSubtotal];
+                $items[] = [$product, $quantity, $salePrice, $lineSubtotal];
             }
 
             $discount = round((float) ($data['descuento'] ?? 0), 2);
@@ -160,7 +162,7 @@ class VentaController extends Controller
                     ? $discount - $allocated
                     : round($discount * ($lineSubtotal / $subtotal), 2);
                 $allocated += $lineDiscount;
-                $sale->detalles()->create([
+                $saleDetail = $sale->detalles()->create([
                     'producto_id' => $product->id,
                     'codigo' => $product->codigo,
                     'codigo_barras' => $product->codigo_barras,
@@ -176,6 +178,23 @@ class VentaController extends Controller
                     'total' => $lineSubtotal - $lineDiscount,
                 ]);
                 $product->decrement('stock_inicial', $quantity);
+                $remaining = $quantity;
+                $lots = Lote::where('producto_id', $product->id)
+                    ->where('cantidad_disponible', '>', 0)
+                    ->orderByRaw('fecha_vencimiento IS NULL')
+                    ->orderBy('fecha_vencimiento')->orderBy('id')->lockForUpdate()->get();
+                foreach ($lots as $lot) {
+                    if ($remaining <= 0.0001) {
+                        break;
+                    }
+                    $taken = min($remaining, (float) $lot->cantidad_disponible);
+                    $lot->decrement('cantidad_disponible', $taken);
+                    DB::table('venta_detalle_lotes')->insert([
+                        'venta_detalle_id' => $saleDetail->id, 'lote_id' => $lot->id,
+                        'cantidad' => $taken, 'created_at' => now(), 'updated_at' => now(),
+                    ]);
+                    $remaining = round($remaining - $taken, 3);
+                }
             }
 
             return $sale;
@@ -213,6 +232,10 @@ class VentaController extends Controller
         DB::transaction(function () use ($venta) {
             foreach ($venta->detalles as $detail) {
                 Producto::whereKey($detail->producto_id)->increment('stock_inicial', $detail->cantidad);
+                $allocations = DB::table('venta_detalle_lotes')->where('venta_detalle_id', $detail->id)->get();
+                foreach ($allocations as $allocation) {
+                    Lote::whereKey($allocation->lote_id)->increment('cantidad_disponible', $allocation->cantidad);
+                }
             }
             $venta->update(['estado' => 'ANULADA']);
         });

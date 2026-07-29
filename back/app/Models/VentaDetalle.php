@@ -21,7 +21,7 @@ class VentaDetalle extends Model implements AuditableContract
 
     protected $casts = [
         'precio_compra' => 'decimal:2', 'precio_venta' => 'decimal:4',
-        'cantidad' => 'integer', 'subtotal' => 'decimal:2',
+        'cantidad' => 'decimal:3', 'subtotal' => 'decimal:2',
         'descuento' => 'decimal:2', 'total' => 'decimal:2',
     ];
 

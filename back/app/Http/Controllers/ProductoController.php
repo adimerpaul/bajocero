@@ -115,7 +115,7 @@ class ProductoController extends Controller
             'unidad' => ['required', 'string', 'max:20'],
             'precio_compra' => ['required', 'numeric', 'min:0'],
             'precio_venta' => ['required', 'numeric', 'min:0'],
-            'stock_inicial' => ['required', 'integer', 'min:0'],
+            'stock_inicial' => ['required', 'numeric', 'min:0', 'decimal:0,3'],
         ]);
         foreach (['codigo', 'nombre', 'categoria', 'unidad'] as $field) {
             $data[$field] = isset($data[$field]) && $data[$field] !== null

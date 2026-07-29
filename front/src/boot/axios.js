@@ -20,6 +20,11 @@ export default defineBoot(({ app, router }) => {
   app.config.globalProperties.$url = import.meta.env.VITE_API_BACK
   app.config.globalProperties.$imgBase = (import.meta.env.VITE_API_BACK || '').replace(/\/api\/?$/, '')
   app.config.globalProperties.$version = import.meta.env.VITE_VERSION
+  app.config.globalProperties.$axios.get('/configuracion').then(({ data }) => {
+    data.logo_url = data.logo ? `${app.config.globalProperties.$imgBase}/images/${data.logo}` : null
+    localStorage.setItem('empresaBajoCero', JSON.stringify(data))
+    app.config.globalProperties.$empresa = data
+  })
 
   const token = localStorage.getItem('tokenBajoCero')
   if (token) {

@@ -1,11 +1,14 @@
 <?php
 
+use App\Http\Controllers\CompraController;
+use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\ProductoController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\VentaController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/login', [UserController::class, 'login']);
+Route::get('/configuracion', [ConfiguracionController::class, 'show']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [UserController::class, 'me']);
@@ -42,4 +45,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/ventas-exportar/pdf', [VentaController::class, 'exportPdf']);
     Route::get('/ventas/{venta}', [VentaController::class, 'show']);
     Route::put('/ventas/{venta}/anular', [VentaController::class, 'cancel']);
+
+    Route::get('/compras', [CompraController::class, 'index']);
+    Route::get('/compras-resumen', [CompraController::class, 'summary']);
+    Route::post('/compras', [CompraController::class, 'store']);
+    Route::get('/compras/{compra}', [CompraController::class, 'show']);
+    Route::put('/compras/{compra}/anular', [CompraController::class, 'cancel']);
+    Route::get('/proveedores', [CompraController::class, 'proveedores']);
+    Route::post('/proveedores', [CompraController::class, 'storeProveedor']);
+    Route::get('/vencimientos', [CompraController::class, 'vencimientos']);
+    Route::put('/configuracion', [ConfiguracionController::class, 'update']);
+    Route::post('/configuracion/logo', [ConfiguracionController::class, 'uploadLogo']);
 });
