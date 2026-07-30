@@ -127,11 +127,12 @@ class VentaController extends Controller
             foreach ($data['detalles'] as $detail) {
                 $product = Producto::lockForUpdate()->findOrFail($detail['producto_id']);
                 $quantity = round((float) $detail['cantidad'], 3);
-                abort_if((float) $product->stock_inicial + 0.0001 < $quantity, 422, "Stock insuficiente para {$product->nombre}");
+                $deductStock = (float) $product->stock_inicial > 0;
+                abort_if($deductStock && (float) $product->stock_inicial + 0.0001 < $quantity, 422, "Stock insuficiente para {$product->nombre}");
                 $salePrice = round((float) $detail['precio_venta'], 4);
                 $lineSubtotal = round($salePrice * $quantity, 2);
                 $subtotal += $lineSubtotal;
-                $items[] = [$product, $quantity, $salePrice, $lineSubtotal];
+                $items[] = [$product, $quantity, $salePrice, $lineSubtotal, $deductStock];
             }
 
             $discount = round((float) ($data['descuento'] ?? 0), 2);
@@ -157,7 +158,7 @@ class VentaController extends Controller
             $sale->update(['numero' => 'V-'.str_pad((string) $sale->id, 8, '0', STR_PAD_LEFT)]);
 
             $allocated = 0;
-            foreach ($items as $index => [$product, $quantity, $salePrice, $lineSubtotal]) {
+            foreach ($items as $index => [$product, $quantity, $salePrice, $lineSubtotal, $deductStock]) {
                 $lineDiscount = $index === array_key_last($items)
                     ? $discount - $allocated
                     : round($discount * ($lineSubtotal / $subtotal), 2);
@@ -173,10 +174,14 @@ class VentaController extends Controller
                     'precio_compra' => $product->precio_compra,
                     'precio_venta' => $salePrice,
                     'cantidad' => $quantity,
+                    'descuenta_stock' => $deductStock,
                     'subtotal' => $lineSubtotal,
                     'descuento' => $lineDiscount,
                     'total' => $lineSubtotal - $lineDiscount,
                 ]);
+                if (! $deductStock) {
+                    continue;
+                }
                 $product->decrement('stock_inicial', $quantity);
                 $remaining = $quantity;
                 $lots = Lote::where('producto_id', $product->id)
@@ -231,6 +236,9 @@ class VentaController extends Controller
 
         DB::transaction(function () use ($venta) {
             foreach ($venta->detalles as $detail) {
+                if (! $detail->descuenta_stock) {
+                    continue;
+                }
                 Producto::whereKey($detail->producto_id)->increment('stock_inicial', $detail->cantidad);
                 $allocations = DB::table('venta_detalle_lotes')->where('venta_detalle_id', $detail->id)->get();
                 foreach ($allocations as $allocation) {
