@@ -17,7 +17,10 @@ class VentaController extends Controller
     public function index(Request $request)
     {
         $this->authorizeAction($request, 'Ver Ventas');
-        $query = $this->filteredQuery($request)->withCount('detalles')->latest('fecha');
+        $query = $this->filteredQuery($request)
+            ->with('detalles:id,venta_id,nombre,cantidad,unidad')
+            ->withCount('detalles')
+            ->latest('fecha');
 
         $perPage = (int) $request->input('per_page', 20);
 

@@ -24,6 +24,7 @@
       <q-table dense flat :rows="rows" :columns="columns" row-key="id" :loading="loading" v-model:pagination="pagination" :rows-per-page-options="[15,30,50,100,0]" @request="onRequest">
         <template #body-cell-total="p"><q-td :props="p"><b>Bs {{money(p.value)}}</b></q-td></template>
         <template #body-cell-tipo_pago="p"><q-td :props="p"><q-chip dense square :color="paymentColor(p.value)" text-color="white" :icon="p.value==='QR'?'qr_code_2':p.value==='EFECTIVO'?'payments':'account_balance_wallet'">{{p.value}}</q-chip></q-td></template>
+        <template #body-cell-detalles="p"><q-td :props="p"><div class="items-list"><div v-for="d in (p.row.detalles||[])" :key="d.id" class="items-row"><b>{{qty(d.cantidad)}}{{d.unidad==='KG'?'kg':''}}</b> {{d.nombre}}</div><q-tooltip v-if="p.row.detalles?.length"><div v-for="d in p.row.detalles" :key="d.id">{{qty(d.cantidad)}}{{d.unidad==='KG'?'kg':''}} · {{d.nombre}}</div></q-tooltip></div></q-td></template>
         <template #body-cell-estado="p"><q-td :props="p"><q-badge :color="p.value==='COMPLETADA'?'positive':'negative'" :label="p.value"/></q-td></template>
         <template #body-cell-actions="p"><q-td :props="p"><q-btn-dropdown dense flat color="primary" icon="more_vert" dropdown-icon="none"><q-list dense style="min-width:150px"><q-item clickable v-close-popup @click="showDetail(p.row)"><q-item-section avatar><q-icon name="visibility" color="primary"/></q-item-section><q-item-section>Ver detalle</q-item-section></q-item><q-item clickable v-close-popup @click="printRow(p.row)"><q-item-section avatar><q-icon name="print" color="blue-grey"/></q-item-section><q-item-section>Imprimir</q-item-section></q-item><q-separator/><q-item v-if="can('Anular Ventas')&&p.row.estado==='COMPLETADA'" clickable v-close-popup class="text-negative" @click="cancel(p.row)"><q-item-section avatar><q-icon name="cancel"/></q-item-section><q-item-section>Anular</q-item-section></q-item></q-list></q-btn-dropdown></q-td></template>
       </q-table>
@@ -40,9 +41,11 @@ import {printSale} from '../../addons/ventaPrint'
 const today=()=>{const d=new Date(),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`}
 const {proxy}=getCurrentInstance(),rows=ref([]),loading=ref(false),search=ref(''),from=ref(today()),to=ref(today()),fromTime=ref('00:01'),toTime=ref('23:59'),user=ref(null),dialog=ref(false),selected=reactive({}),summary=reactive({efectivo:0,qr:0,total:0,descuento:0,cantidad:0,usuarios:[]})
 const pagination=ref({page:1,rowsPerPage:15,rowsNumber:0}),money=v=>Number(v||0).toFixed(2),can=p=>proxy.$store.hasPermission(p)
+// Cantidad sin ceros de relleno: 2 para piezas, 0.355 para peso.
+const qty=v=>{const n=Number(v||0);return Number.isInteger(n)?String(n):String(parseFloat(n.toFixed(3)))}
 function resetToday(){from.value=today();to.value=today();fromTime.value='00:01';toTime.value='23:59';search.value='';user.value=null;load(true)}
 const cards=computed(()=>[{label:'Total vendido',value:summary.total,money:true,icon:'trending_up',color:'primary'},{label:'Efectivo',value:summary.efectivo,money:true,icon:'payments',color:'green'},{label:'QR',value:summary.qr,money:true,icon:'qr_code_2',color:'blue'},{label:'Ventas',value:summary.cantidad,money:false,icon:'receipt_long',color:'purple'}])
-const columns=[{name:'actions',label:'',align:'left'},{name:'numero',label:'Nº venta',field:'numero',align:'left'},{name:'fecha',label:'Fecha',field:r=>formatDate(r.fecha),align:'left'},{name:'usuario',label:'Usuario',field:'usuario_nombre',align:'left'},{name:'tipo_pago',label:'Pago',field:'tipo_pago',align:'center'},{name:'detalles',label:'Productos',field:'detalles_count',align:'center'},{name:'descuento',label:'Descuento',field:'descuento',format:v=>`Bs ${money(v)}`,align:'right'},{name:'total',label:'Total',field:'total',align:'right'},{name:'estado',label:'Estado',field:'estado',align:'center'}]
+const columns=[{name:'actions',label:'',align:'left'},{name:'numero',label:'Nº venta',field:'numero',align:'left'},{name:'fecha',label:'Fecha',field:r=>formatDate(r.fecha),align:'left'},{name:'usuario',label:'Usuario',field:'usuario_nombre',align:'left'},{name:'tipo_pago',label:'Pago',field:'tipo_pago',align:'center'},{name:'detalles',label:'Productos',field:'detalles_count',align:'left'},{name:'descuento',label:'Descuento',field:'descuento',format:v=>`Bs ${money(v)}`,align:'right'},{name:'total',label:'Total',field:'total',align:'right'},{name:'estado',label:'Estado',field:'estado',align:'center'}]
 const detailColumns=[{name:'codigo',label:'Código',field:'codigo',align:'left'},{name:'nombre',label:'Producto',field:'nombre',align:'left'},{name:'cantidad',label:'Cant.',field:'cantidad',align:'center'},{name:'precio',label:'Precio',field:'precio_venta',format:v=>`Bs ${money(v)}`,align:'right'},{name:'total',label:'Total',field:'total',align:'right'}]
 const params=()=>({q:search.value,desde:from.value,hasta:to.value,hora_desde:fromTime.value,hora_hasta:toTime.value,user_id:user.value?.id}),paymentColor=v=>v==='EFECTIVO'?'green':v==='QR'?'blue':'purple'
 function formatDate(v){return v?new Date(v).toLocaleString('es-BO'):''}
@@ -55,4 +58,7 @@ async function download(type){try{const response=await proxy.$axios.get(`/ventas
 load()
 </script>
 
-<style scoped>.summary-card{border-radius:10px}</style>
+<style scoped>.summary-card{border-radius:10px}
+.items-list{max-width:280px;padding:1px 0}
+.items-row{font-size:9px;line-height:1.35;color:#5f5f5f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
