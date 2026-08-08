@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\AlmacenController;
+use App\Http\Controllers\BajaController;
 use App\Http\Controllers\CompraController;
 use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\ProductoController;
@@ -27,6 +29,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/productos', [ProductoController::class, 'index']);
     Route::get('/productos-catalogos', [ProductoController::class, 'catalogos']);
+    Route::get('/productos-exportar/excel', [ProductoController::class, 'exportExcel']);
+    Route::get('/productos-exportar/pdf', [ProductoController::class, 'exportPdf']);
+    Route::get('/productos-plantilla-stock', [ProductoController::class, 'plantillaStock']);
+    Route::post('/productos-importar-stock', [ProductoController::class, 'importarStock']);
     Route::post('/categorias', [ProductoController::class, 'storeCategoria']);
     Route::put('/categorias/{categoria}', [ProductoController::class, 'updateCategoria']);
     Route::delete('/categorias/{categoria}', [ProductoController::class, 'destroyCategoria']);
@@ -54,6 +60,28 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/proveedores', [CompraController::class, 'proveedores']);
     Route::post('/proveedores', [CompraController::class, 'storeProveedor']);
     Route::get('/vencimientos', [CompraController::class, 'vencimientos']);
+
+    Route::get('/bajas', [BajaController::class, 'index']);
+    Route::get('/bajas-resumen', [BajaController::class, 'summary']);
+    Route::get('/bajas-catalogos', [BajaController::class, 'catalogos']);
+    Route::get('/bajas-lotes', [BajaController::class, 'lotes']);
+    Route::post('/bajas', [BajaController::class, 'store']);
+    Route::get('/bajas/{baja}', [BajaController::class, 'show']);
+    Route::put('/bajas/{baja}/anular', [BajaController::class, 'cancel']);
+
+    Route::get('/almacenes', [AlmacenController::class, 'index']);
+    Route::get('/almacenes-resumen', [AlmacenController::class, 'summary']);
+    Route::post('/almacenes', [AlmacenController::class, 'store']);
+    Route::get('/almacenes/{almacen}', [AlmacenController::class, 'show']);
+    Route::put('/almacenes/{almacen}', [AlmacenController::class, 'update']);
+    Route::get('/almacenes/{almacen}/avance', [AlmacenController::class, 'progress']);
+    Route::post('/almacenes/{almacen}/detalles', [AlmacenController::class, 'storeDetalle']);
+    Route::put('/almacenes/{almacen}/detalles/{detalle}', [AlmacenController::class, 'updateDetalle']);
+    Route::delete('/almacenes/{almacen}/detalles/{detalle}', [AlmacenController::class, 'destroyDetalle']);
+    Route::post('/almacenes/{almacen}/aplicar', [AlmacenController::class, 'apply']);
+    Route::put('/almacenes/{almacen}/anular', [AlmacenController::class, 'cancel']);
+    Route::delete('/almacenes/{almacen}', [AlmacenController::class, 'destroy']);
+
     Route::put('/configuracion', [ConfiguracionController::class, 'update']);
     Route::post('/configuracion/logo', [ConfiguracionController::class, 'uploadLogo']);
 });

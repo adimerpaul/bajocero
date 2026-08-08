@@ -6,18 +6,44 @@
         <div class="text-caption text-grey-7">Inventario inicial, precios e imágenes</div>
       </div>
       <q-space />
+      <q-btn-dropdown dense flat color="primary" icon="download" label="Exportar" no-caps class="q-mr-xs" :loading="exporting">
+        <q-list dense>
+          <q-item clickable v-close-popup @click="download('excel')"><q-item-section avatar><q-icon name="table_view" color="positive"/></q-item-section><q-item-section>Excel</q-item-section></q-item>
+          <q-item clickable v-close-popup @click="download('pdf')"><q-item-section avatar><q-icon name="picture_as_pdf" color="negative"/></q-item-section><q-item-section>PDF</q-item-section></q-item>
+        </q-list>
+      </q-btn-dropdown>
+      <q-btn-dropdown v-if="can('Editar Productos')" dense flat color="primary" icon="edit_note" label="Cantidades" no-caps class="q-mr-xs" :loading="importing">
+        <q-list dense style="min-width:210px">
+          <q-item clickable v-close-popup @click="downloadTemplate"><q-item-section avatar><q-icon name="download_for_offline" color="primary"/></q-item-section><q-item-section><q-item-label>Descargar modelo</q-item-label><q-item-label caption>Código, producto y cantidad</q-item-label></q-item-section></q-item>
+          <q-item clickable v-close-popup @click="pickFile"><q-item-section avatar><q-icon name="upload_file" color="positive"/></q-item-section><q-item-section><q-item-label>Importar llenado</q-item-label><q-item-label caption>Revisa antes de aplicar</q-item-label></q-item-section></q-item>
+        </q-list>
+      </q-btn-dropdown>
+      <input ref="fileInput" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="previewImport">
       <q-btn v-if="can('Editar Productos')" dense flat color="primary" icon="category" label="Categorías" no-caps class="q-mr-xs" @click="openCategories" />
       <q-btn v-if="can('Crear Productos')" dense color="primary" icon="add" label="Nuevo" no-caps @click="openForm()" />
     </div>
 
     <q-card flat bordered>
       <q-card-section class="row q-col-gutter-sm q-pa-sm">
-        <q-input v-model="search" outlined dense debounce="350" class="col-12 col-md-5"
-                 placeholder="Buscar por código, producto o categoría" clearable @update:model-value="load">
+        <q-input v-model="search" outlined dense debounce="350" class="col-12 col-md-4"
+                 placeholder="Buscar por código, producto o categoría" clearable @update:model-value="() => load(true)">
           <template #prepend><q-icon name="search" /></template>
         </q-input>
         <q-select v-model="category" :options="catalogs.categorias" option-label="nombre" outlined dense clearable
-                  label="Categoría" class="col-12 col-md-3" @update:model-value="load" />
+                  label="Categoría" class="col-6 col-md-2" @update:model-value="() => load(true)" />
+        <q-select v-model="unit" :options="catalogs.unidades" outlined dense clearable
+                  label="Unidad" class="col-6 col-md-2" @update:model-value="() => load(true)" />
+        <q-select v-model="stockFilter" :options="stockOptions" emit-value map-options outlined dense
+                  label="Stock" class="col-6 col-md-2" @update:model-value="() => load(true)" />
+        <q-select v-model="sortBy" :options="sortOptions" emit-value map-options outlined dense
+                  label="Ordenar por" class="col-6 col-md-2">
+          <template #prepend><q-icon name="sort" /></template>
+          <template #append>
+            <q-btn dense flat round size="sm" :icon="pagination.descending ? 'arrow_downward' : 'arrow_upward'" @click.stop="toggleDirection">
+              <q-tooltip>{{ pagination.descending ? 'Descendente' : 'Ascendente' }}</q-tooltip>
+            </q-btn>
+          </template>
+        </q-select>
       </q-card-section>
       <q-table dense flat :rows="rows" :columns="columns" row-key="id" :loading="loading"
                v-model:pagination="pagination" :rows-per-page-options="[10,20,50,100,0]" @request="onRequest" binary-state-sort>
@@ -40,6 +66,46 @@
         </template>
       </q-table>
     </q-card>
+
+    <q-dialog v-model="importDialog" persistent>
+      <q-card style="width:860px;max-width:96vw">
+        <q-card-section class="row items-center q-py-sm">
+          <q-icon name="fact_check" color="primary" size="26px" class="q-mr-sm"/>
+          <div>
+            <div class="text-subtitle1 text-weight-bold">Se modificarán estas cantidades</div>
+            <div class="text-caption text-grey-7">{{preview.cambios.length}} producto(s) cambian<span v-if="preview.sin_cambio"> · {{preview.sin_cambio}} sin cambio</span><span v-if="preview.errores.length"> · {{preview.errores.length}} con problema</span></div>
+          </div>
+          <q-space/><q-btn flat round dense icon="close" v-close-popup/>
+        </q-card-section>
+        <q-separator/>
+        <q-banner v-if="preview.errores.length" dense class="bg-orange-1 text-orange-10">
+          <template #avatar><q-icon name="warning" color="orange"/></template>
+          <div class="text-caption text-weight-bold">Estas filas se ignorarán:</div>
+          <ul class="q-my-none q-pl-md text-caption"><li v-for="(e,i) in preview.errores.slice(0,6)" :key="i">{{e}}</li></ul>
+          <div v-if="preview.errores.length>6" class="text-caption">…y {{preview.errores.length-6}} más</div>
+        </q-banner>
+        <q-card-section v-if="preview.cambios.length" class="q-pa-none" style="max-height:50vh;overflow:auto">
+          <q-markup-table dense flat square>
+            <thead><tr><th class="text-left">Código</th><th class="text-left">Producto</th><th class="text-right">Actual</th><th class="text-right">Nueva</th><th class="text-right">Diferencia</th></tr></thead>
+            <tbody>
+              <tr v-for="item in preview.cambios" :key="item.producto_id">
+                <td class="text-left">{{item.codigo}}</td>
+                <td class="text-left">{{item.nombre}}</td>
+                <td class="text-right text-grey-7">{{qty(item.actual)}}</td>
+                <td class="text-right text-weight-bold">{{qty(item.nuevo)}} <span class="text-caption text-grey-6">{{item.unidad}}</span></td>
+                <td class="text-right" :class="item.diferencia>0?'text-positive':'text-negative'">{{item.diferencia>0?'+':''}}{{qty(item.diferencia)}}</td>
+              </tr>
+            </tbody>
+          </q-markup-table>
+        </q-card-section>
+        <q-card-section v-else class="text-center text-grey-7 q-pa-md">No hay cantidades distintas a las actuales.</q-card-section>
+        <q-separator/>
+        <q-card-actions align="right">
+          <q-btn flat label="Cancelar" no-caps v-close-popup />
+          <q-btn v-if="preview.cambios.length" color="primary" icon="check" :label="`Aceptar y actualizar ${preview.cambios.length}`" no-caps :loading="importing" @click="applyImport" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <q-dialog v-model="dialog" persistent>
       <q-card style="width:700px;max-width:95vw">
@@ -104,15 +170,33 @@
 </template>
 
 <script setup>
-import { getCurrentInstance, onMounted, reactive, ref } from 'vue'
+import { computed, getCurrentInstance, onMounted, reactive, ref } from 'vue'
 const { proxy } = getCurrentInstance()
-const rows = ref([]), loading = ref(false), saving = ref(false), dialog = ref(false)
+const rows = ref([]), loading = ref(false), saving = ref(false), dialog = ref(false), exporting = ref(false)
 const categoriesDialog = ref(false)
+const importing = ref(false), importDialog = ref(false), fileInput = ref(null), importFile = ref(null)
+const preview = ref({ cambios: [], errores: [], sin_cambio: 0 })
 const photo = ref(null), photoPreview = ref('')
-const search = ref(''), category = ref(null)
+const search = ref(''), category = ref(null), unit = ref(null), stockFilter = ref('')
 const catalogs = reactive({ categorias: [], unidades: [] })
 const unitOptions = ref(['GR', 'KG', 'ML', 'LT', 'UNIDAD'])
-const pagination = ref({ page: 1, rowsPerPage: 20, rowsNumber: 0 })
+const pagination = ref({ page: 1, rowsPerPage: 20, rowsNumber: 0, sortBy: 'nombre', descending: false })
+const stockOptions = [
+  { label: 'Todos', value: '' },
+  { label: 'Con stock', value: 'con' },
+  { label: 'Sin stock', value: 'sin' },
+  { label: 'Stock bajo (≤ 10)', value: 'bajo' }
+]
+const sortOptions = [
+  { label: 'Producto (alfabético)', value: 'nombre' },
+  { label: 'Código', value: 'codigo' },
+  { label: 'Categoría', value: 'categoria' },
+  { label: 'Unidad', value: 'unidad' },
+  { label: 'Precio compra', value: 'precio_compra' },
+  { label: 'Precio venta', value: 'precio_venta' },
+  { label: 'Cantidad en stock', value: 'stock_inicial' },
+  { label: 'Más recientes', value: 'created_at' }
+]
 const empty = () => ({ id: null, codigo: '', codigo_barras: '', nombre: '', categoria_id: null, unidad: 'UNIDAD', precio_compra: 0, precio_venta: 0, stock_inicial: 0, foto: null, foto_url: '' })
 const form = reactive(empty())
 const categoryForm = reactive({ id:null, nombre:'', color:'primary' })
@@ -120,27 +204,93 @@ const colorOptions=['primary','blue','light-blue','purple','amber','orange','red
 const columns = [
   { name:'actions', label:'Acciones', align:'left' },
   { name:'foto', label:'', field:'foto', align:'left' },
-  { name:'codigo', label:'Código', field:'codigo', align:'left' },
-  { name:'codigo_barras', label:'Código barras', field:'codigo_barras', align:'left' },
-  { name:'nombre', label:'Producto', field:'nombre', align:'left' },
-  { name:'categoria', label:'Categoría', field:row=>row.categoria_relacion?.nombre||row.categoria, align:'left' },
-  { name:'unidad', label:'Unidad', field:'unidad', align:'center' },
-  { name:'precio_compra', label:'P. compra', field:'precio_compra', align:'right' },
-  { name:'precio_venta', label:'P. venta', field:'precio_venta', align:'right' },
-  { name:'stock_inicial', label:'Stock inicial', field:'stock_inicial', align:'center' }
+  { name:'codigo', label:'Código', field:'codigo', align:'left', sortable:true },
+  { name:'codigo_barras', label:'Código barras', field:'codigo_barras', align:'left', sortable:true },
+  { name:'nombre', label:'Producto', field:'nombre', align:'left', sortable:true },
+  { name:'categoria', label:'Categoría', field:row=>row.categoria_relacion?.nombre||row.categoria, align:'left', sortable:true },
+  { name:'unidad', label:'Unidad', field:'unidad', align:'center', sortable:true },
+  { name:'precio_compra', label:'P. compra', field:'precio_compra', align:'right', sortable:true },
+  { name:'precio_venta', label:'P. venta', field:'precio_venta', align:'right', sortable:true },
+  { name:'stock_inicial', label:'Stock inicial', field:'stock_inicial', align:'center', sortable:true }
 ]
 const can = p => proxy.$store.hasPermission(p)
 const required = v => (v !== null && v !== '') || 'Campo requerido'
 const nonNegative = v => Number(v) >= 0 || 'Debe ser mayor o igual a cero'
 const money = v => Number(v || 0).toFixed(2)
 const photoUrl = path => `${proxy.$imgBase}/images/${path}`
-function load () { onRequest({ pagination: pagination.value }) }
+const sortBy = computed({
+  get: () => pagination.value.sortBy,
+  set: value => { pagination.value.sortBy = value || 'nombre'; load(true) }
+})
+function toggleDirection () { pagination.value.descending = !pagination.value.descending; load(true) }
+function filterParams () {
+  return {
+    q: search.value || undefined,
+    categoria_id: category.value?.id,
+    unidad: unit.value || undefined,
+    stock: stockFilter.value || undefined
+  }
+}
+function load (resetPage = false) {
+  onRequest({ pagination: resetPage ? { ...pagination.value, page:1 } : pagination.value })
+}
 function onRequest ({ pagination: p }) {
   loading.value = true
-  proxy.$axios.get('/productos', { params:{ q:search.value, categoria_id:category.value?.id, page:p.page, per_page:p.rowsPerPage } })
+  const params = { ...filterParams(), page:p.page, per_page:p.rowsPerPage, sort_by:p.sortBy, sort_dir:p.descending ? 'desc' : 'asc' }
+  proxy.$axios.get('/productos', { params })
     .then(({ data }) => { rows.value=data.data; pagination.value={ ...p, rowsNumber:data.total } })
     .catch(e => proxy.$alert.error(e.response?.data?.message || 'No se pudieron cargar los productos'))
     .finally(() => { loading.value=false })
+}
+async function download (type) {
+  exporting.value = true
+  try {
+    const params = { ...filterParams(), sort_by:pagination.value.sortBy, sort_dir:pagination.value.descending ? 'desc' : 'asc' }
+    const response = await proxy.$axios.get(`/productos-exportar/${type}`, { params, responseType:'blob' })
+    const url = URL.createObjectURL(response.data), a = document.createElement('a')
+    a.href = url; a.download = `productos.${type === 'excel' ? 'xlsx' : 'pdf'}`; a.click(); URL.revokeObjectURL(url)
+  } catch { proxy.$alert.error('No se pudo exportar el reporte') }
+  finally { exporting.value = false }
+}
+// Muestra la cantidad exacta: 3 decimales como máximo, sin ceros de relleno.
+// No se redondea por unidad porque el stock puede tener decimales aunque el producto sea PZS.
+const qty = value => {
+  const n = Number(value || 0)
+  return (Math.round(n * 1000) / 1000).toString()
+}
+async function downloadTemplate () {
+  exporting.value = true
+  try {
+    const response = await proxy.$axios.get('/productos-plantilla-stock', { params:filterParams(), responseType:'blob' })
+    const url = URL.createObjectURL(response.data), a = document.createElement('a')
+    a.href = url; a.download = 'modelo_cantidades.xlsx'; a.click(); URL.revokeObjectURL(url)
+    proxy.$alert.info('Llena la columna Cantidad y vuelve a importar el archivo')
+  } catch { proxy.$alert.error('No se pudo descargar el modelo') }
+  finally { exporting.value = false }
+}
+function pickFile () { if (fileInput.value) { fileInput.value.value = ''; fileInput.value.click() } }
+async function previewImport (event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  importFile.value = file
+  importing.value = true
+  try {
+    const data = new FormData(); data.append('archivo', file)
+    const { data:result } = await proxy.$axios.post('/productos-importar-stock', data)
+    preview.value = { cambios:result.cambios || [], errores:result.errores || [], sin_cambio:result.sin_cambio || 0 }
+    importDialog.value = true
+  } catch(e) { proxy.$alert.error(Object.values(e.response?.data?.errors||{})[0]?.[0] || e.response?.data?.message || 'No se pudo leer el archivo') }
+  finally { importing.value = false }
+}
+async function applyImport () {
+  importing.value = true
+  try {
+    const data = new FormData(); data.append('archivo', importFile.value); data.append('confirmar', '1')
+    const { data:result } = await proxy.$axios.post('/productos-importar-stock', data)
+    proxy.$alert.success(result.message)
+    importDialog.value = false; importFile.value = null; load()
+  } catch(e) { proxy.$alert.error(e.response?.data?.message || 'No se pudieron actualizar las cantidades') }
+  finally { importing.value = false }
 }
 function loadCatalogs () {
   return proxy.$axios.get('/productos-catalogos').then(({data}) => {

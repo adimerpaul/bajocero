@@ -34,3 +34,5 @@ yarn-error.log*
 
 # Local validation databases
 /back/database/*.sqlite
+AGENTS.md
+CLAUDE.md

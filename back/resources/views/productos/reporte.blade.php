@@ -1,0 +1,8 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><style>
+body{font-family:Helvetica,sans-serif;font-size:9px;color:#263238}h2{margin:0;color:#b71c1c;font-size:14px}.meta{margin:3px 0 8px;color:#607d8b}
+table{width:100%;border-collapse:collapse}th{background:#b71c1c;color:#fff;padding:4px;text-align:left}td{padding:3px;border-bottom:1px solid #ddd}.right{text-align:right}.totals{margin-top:10px;text-align:right;font-size:11px}
+</style></head><body><h2>BAJO CERO - REPORTE DE PRODUCTOS</h2><div class="meta">Generado: {{ now()->format('d/m/Y H:i') }}@if($filtros) &nbsp;·&nbsp; {{ $filtros }}@endif</div>
+<table><thead><tr><th>Código</th><th>Cód. barras</th><th>Producto</th><th>Categoría</th><th>Unidad</th><th class="right">P. compra</th><th class="right">P. venta</th><th class="right">Stock</th><th class="right">Valor venta</th></tr></thead>
+<tbody>@foreach($productos as $p)<tr><td>{{$p->codigo}}</td><td>{{$p->codigo_barras}}</td><td>{{$p->nombre}}</td><td>{{$p->categoriaRelacion?->nombre ?? $p->categoria}}</td><td>{{$p->unidad}}</td><td class="right">{{number_format($p->precio_compra,2)}}</td><td class="right">{{number_format($p->precio_venta,2)}}</td><td class="right">{{number_format($p->stock_inicial, $p->unidad === 'KG' ? 3 : 0)}}</td><td class="right">{{number_format($p->stock_inicial * $p->precio_venta,2)}}</td></tr>@endforeach</tbody></table>
+<div class="totals"><b>Productos: {{ $resumen['cantidad'] }} &nbsp; Valor compra: Bs {{number_format($resumen['valor_compra'],2)}} &nbsp; Valor venta: Bs {{number_format($resumen['valor_venta'],2)}}</b></div>
+</body></html>
