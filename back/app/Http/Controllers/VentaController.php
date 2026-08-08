@@ -3,8 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Exports\VentasExport;
-use App\Models\Producto;
 use App\Models\Lote;
+use App\Models\Producto;
 use App\Models\User;
 use App\Models\Venta;
 use Barryvdh\DomPDF\Facade\Pdf;
@@ -222,11 +222,33 @@ class VentaController extends Controller
         if ($to = $request->date('hasta')) {
             $query->whereDate('fecha', '<=', $to);
         }
+        if ($fromTime = $this->normalizeTime($request->input('hora_desde'), '00:00:00')) {
+            $query->whereTime('fecha', '>=', $fromTime);
+        }
+        if ($toTime = $this->normalizeTime($request->input('hora_hasta'), '23:59:59')) {
+            $query->whereTime('fecha', '<=', $toTime);
+        }
         if ($userId = $request->integer('user_id')) {
             $query->where('user_id', $userId);
         }
 
         return $query;
+    }
+
+    /**
+     * Convierte "08:30" en "08:30:00" / "08:30:59" según sea el inicio o el fin del rango.
+     * Sin los segundos, un "hasta las 23:59" dejaría fuera las ventas de 23:59:01 en adelante.
+     */
+    private function normalizeTime(?string $time, string $fallbackSeconds): ?string
+    {
+        $time = trim((string) $time);
+        if (! preg_match('/^([01]\d|2[0-3]):([0-5]\d)(:([0-5]\d))?$/', $time, $parts)) {
+            return null;
+        }
+
+        return isset($parts[4])
+            ? $time
+            : $parts[1].':'.$parts[2].':'.substr($fallbackSeconds, -2);
     }
 
     public function cancel(Request $request, Venta $venta)
