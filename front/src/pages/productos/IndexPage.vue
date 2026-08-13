@@ -45,7 +45,7 @@
           </template>
         </q-select>
       </q-card-section>
-      <q-table dense flat :rows="rows" :columns="columns" row-key="id" :loading="loading"
+      <q-table dense flat class="tight-table" :rows="rows" :columns="columns" row-key="id" :loading="loading"
                v-model:pagination="pagination" :rows-per-page-options="[10,20,50,100,0]" @request="onRequest" binary-state-sort>
         <template #body-cell-foto="p"><q-td :props="p" class="drop-photo" @dragover.prevent @drop.prevent="dropPhoto($event,p.row)"><q-avatar rounded size="30px" color="grey-2"><img v-if="p.row.foto" :src="photoUrl(p.row.foto)"/><q-icon v-else name="add_photo_alternate" color="grey-5"/></q-avatar><q-tooltip>Arrastra aquí una imagen o URL</q-tooltip></q-td></template>
         <template #body-cell-precio_compra="p"><q-td :props="p">Bs {{ money(p.value) }}</q-td></template>
@@ -59,6 +59,8 @@
             <q-btn-dropdown dense flat color="primary" icon="more_vert" dropdown-icon="none">
               <q-list dense style="min-width:140px">
                 <q-item v-if="can('Editar Productos')" clickable v-close-popup @click="openForm(p.row)"><q-item-section avatar><q-icon name="edit" color="primary"/></q-item-section><q-item-section>Editar</q-item-section></q-item>
+                <q-item clickable v-close-popup @click="openMovements(p.row)"><q-item-section avatar><q-icon name="swap_vert" color="teal"/></q-item-section><q-item-section><q-item-label>Compras y ventas</q-item-label><q-item-label caption>Movimientos del producto</q-item-label></q-item-section></q-item>
+                <q-item clickable v-close-popup @click="openAudit(p.row)"><q-item-section avatar><q-icon name="history" color="deep-purple"/></q-item-section><q-item-section><q-item-label>Auditoría</q-item-label><q-item-label caption>Cambios, fecha y usuario</q-item-label></q-item-section></q-item>
                 <q-item v-if="can('Eliminar Productos')" clickable v-close-popup class="text-negative" @click="remove(p.row)"><q-item-section avatar><q-icon name="delete"/></q-item-section><q-item-section>Eliminar</q-item-section></q-item>
               </q-list>
             </q-btn-dropdown>
@@ -166,6 +168,94 @@
         </q-card-section>
       </q-card>
     </q-dialog>
+
+    <q-dialog v-model="movementsDialog" full-width>
+      <q-card style="max-width:1200px">
+        <q-card-section class="row items-center q-py-sm bg-grey-1">
+          <q-avatar rounded size="38px" color="grey-2" class="q-mr-sm"><img v-if="current.foto" :src="photoUrl(current.foto)"/><q-icon v-else name="inventory_2" color="grey-5"/></q-avatar>
+          <div><div class="text-subtitle1 text-weight-bold">{{current.nombre}}</div><div class="text-caption text-grey-7">{{current.codigo}} · {{current.unidad}} · Compras y ventas</div></div>
+          <q-space/>
+          <q-input v-model="range.desde" dense outlined type="date" label="Desde" stack-label style="width:150px" class="q-mr-xs" @update:model-value="loadMovements"/>
+          <q-input v-model="range.hasta" dense outlined type="date" label="Hasta" stack-label style="width:150px" class="q-mr-xs" @update:model-value="loadMovements"/>
+          <q-btn flat round dense icon="close" v-close-popup/>
+        </q-card-section>
+        <q-separator/>
+        <q-card-section class="q-pa-sm row q-col-gutter-sm">
+          <div v-for="kpi in kpis" :key="kpi.label" class="col-6 col-md">
+            <q-card flat bordered class="q-pa-sm full-height"><div class="text-caption text-grey-7 ellipsis">{{kpi.label}}</div><div class="text-subtitle1 text-weight-bold" :class="kpi.color">{{kpi.value}}</div><div class="text-caption text-grey-6">{{kpi.hint}}</div></q-card>
+          </div>
+        </q-card-section>
+        <q-separator/>
+        <q-tabs v-model="movementsTab" dense align="left" class="text-grey-8" active-color="primary" indicator-color="primary" narrow-indicator>
+          <q-tab name="compras" no-caps icon="shopping_cart" :label="`Compras (${movements.compras.length})`"/>
+          <q-tab name="ventas" no-caps icon="point_of_sale" :label="`Ventas (${movements.ventas.length})`"/>
+        </q-tabs>
+        <q-separator/>
+        <q-tab-panels v-model="movementsTab" animated style="max-height:52vh;overflow:auto">
+          <q-tab-panel name="compras" class="q-pa-none">
+            <q-markup-table dense flat square class="tight-table">
+              <thead><tr><th class="text-left">Fecha</th><th class="text-left">Compra</th><th class="text-left">Proveedor</th><th class="text-left">Factura</th><th class="text-left">Usuario</th><th class="text-right">Cantidad</th><th class="text-right">Costo</th><th class="text-right">Total</th><th class="text-left">Lote / Vence</th><th class="text-left">Estado</th></tr></thead>
+              <tbody>
+                <tr v-for="row in movements.compras" :key="`c${row.id}`" :class="row.estado==='ANULADA'?'text-grey-5':''">
+                  <td>{{formatDate(row.fecha)}}</td><td class="text-weight-bold">{{row.numero}}</td><td>{{row.proveedor_nombre||'—'}}</td><td>{{row.numero_factura||'—'}}</td><td>{{row.usuario_nombre}}</td>
+                  <td class="text-right">{{qty(row.cantidad)}}</td><td class="text-right">Bs {{money(row.precio_unitario)}}</td><td class="text-right text-weight-bold">Bs {{money(row.total)}}</td>
+                  <td>{{row.lote||'—'}}<span v-if="row.fecha_vencimiento" class="text-grey-7"> · {{formatDay(row.fecha_vencimiento)}}</span></td>
+                  <td><q-badge :color="row.estado==='ANULADA'?'negative':'positive'" :label="row.estado"/></td>
+                </tr>
+                <tr v-if="!movements.compras.length"><td colspan="10" class="text-center text-grey-6 q-pa-md">Sin compras en el rango</td></tr>
+              </tbody>
+            </q-markup-table>
+          </q-tab-panel>
+          <q-tab-panel name="ventas" class="q-pa-none">
+            <q-markup-table dense flat square class="tight-table">
+              <thead><tr><th class="text-left">Fecha</th><th class="text-left">Venta</th><th class="text-left">Usuario</th><th class="text-left">Pago</th><th class="text-right">Cantidad</th><th class="text-right">P. venta</th><th class="text-right">Desc.</th><th class="text-right">Total</th><th class="text-right">Utilidad</th><th class="text-left">Estado</th></tr></thead>
+              <tbody>
+                <tr v-for="row in movements.ventas" :key="`v${row.id}`" :class="row.estado==='ANULADA'?'text-grey-5':''">
+                  <td>{{formatDate(row.fecha)}}</td><td class="text-weight-bold">{{row.numero}}</td><td>{{row.usuario_nombre}}</td><td>{{row.tipo_pago}}</td>
+                  <td class="text-right">{{qty(row.cantidad)}}</td><td class="text-right">Bs {{money(row.precio_venta)}}</td><td class="text-right">{{Number(row.descuento)?`Bs ${money(row.descuento)}`:'—'}}</td>
+                  <td class="text-right text-weight-bold">Bs {{money(row.total)}}</td>
+                  <td class="text-right" :class="profit(row)>=0?'text-positive':'text-negative'">Bs {{money(profit(row))}}</td>
+                  <td><q-badge :color="row.estado==='ANULADA'?'negative':'positive'" :label="row.estado"/></td>
+                </tr>
+                <tr v-if="!movements.ventas.length"><td colspan="10" class="text-center text-grey-6 q-pa-md">Sin ventas en el rango</td></tr>
+              </tbody>
+            </q-markup-table>
+          </q-tab-panel>
+        </q-tab-panels>
+        <q-inner-loading :showing="movementsLoading"><q-spinner color="primary" size="32px"/></q-inner-loading>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="auditDialog">
+      <q-card style="width:820px;max-width:96vw">
+        <q-card-section class="row items-center q-py-sm bg-grey-1">
+          <q-icon name="history" color="deep-purple" size="26px" class="q-mr-sm"/>
+          <div><div class="text-subtitle1 text-weight-bold">Auditoría · {{current.nombre}}</div><div class="text-caption text-grey-7">{{current.codigo}} · {{audit.length}} movimiento(s) registrados</div></div>
+          <q-space/><q-btn flat round dense icon="close" v-close-popup/>
+        </q-card-section>
+        <q-separator/>
+        <q-card-section class="q-pa-sm" style="max-height:62vh;overflow:auto">
+          <q-timeline v-if="audit.length" layout="dense" color="deep-purple">
+            <q-timeline-entry v-for="item in audit" :key="item.id" :icon="auditIcon(item.evento)" :color="auditColor(item.evento)">
+              <template #title><span class="text-subtitle2 text-weight-bold">{{item.evento}}</span> <span class="text-caption text-grey-7">por {{item.usuario}}</span></template>
+              <template #subtitle>{{formatDate(item.fecha)}}<span v-if="item.ip" class="text-grey-6"> · {{item.ip}}</span></template>
+              <q-markup-table v-if="item.campos.length" dense flat bordered square class="tight-table">
+                <thead><tr><th class="text-left">Campo</th><th class="text-left">Antes</th><th class="text-left">Después</th></tr></thead>
+                <tbody>
+                  <tr v-for="(campo,i) in item.campos" :key="i">
+                    <td class="text-weight-bold">{{campo.campo}}</td>
+                    <td class="text-grey-7">{{auditValue(campo.antes)}}</td>
+                    <td class="text-positive text-weight-bold">{{auditValue(campo.despues)}}</td>
+                  </tr>
+                </tbody>
+              </q-markup-table>
+            </q-timeline-entry>
+          </q-timeline>
+          <div v-else-if="!auditLoading" class="text-center text-grey-6 q-pa-lg">Este producto todavía no tiene cambios registrados</div>
+        </q-card-section>
+        <q-inner-loading :showing="auditLoading"><q-spinner color="primary" size="32px"/></q-inner-loading>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -180,7 +270,11 @@ const photo = ref(null), photoPreview = ref('')
 const search = ref(''), category = ref(null), unit = ref(null), stockFilter = ref('')
 const catalogs = reactive({ categorias: [], unidades: [] })
 const unitOptions = ref(['GR', 'KG', 'ML', 'LT', 'UNIDAD'])
-const pagination = ref({ page: 1, rowsPerPage: 20, rowsNumber: 0, sortBy: 'nombre', descending: false })
+const pagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0, sortBy: 'nombre', descending: false })
+const movementsDialog = ref(false), movementsLoading = ref(false), movementsTab = ref('compras')
+const movements = ref({ compras: [], ventas: [], resumen: {} })
+const auditDialog = ref(false), auditLoading = ref(false), audit = ref([])
+const current = ref({}), range = reactive({ desde: '', hasta: '' })
 const stockOptions = [
   { label: 'Todos', value: '' },
   { label: 'Con stock', value: 'con' },
@@ -341,6 +435,38 @@ async function save () {
   } catch(e){proxy.$alert.error(Object.values(e.response?.data?.errors || {})[0]?.[0] || e.response?.data?.message || 'No se pudo guardar')}
   finally{saving.value=false}
 }
+const formatDate = value => value ? new Date(String(value).replace(' ', 'T')).toLocaleString('es-BO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'
+const formatDay = value => value ? new Date(`${String(value).slice(0,10)}T12:00:00`).toLocaleDateString('es-BO') : '—'
+const profit = row => Number(row.total || 0) - Number(row.precio_compra || 0) * Number(row.cantidad || 0)
+const kpis = computed(() => {
+  const r = movements.value.resumen || {}, unidad = current.value.unidad || ''
+  return [
+    { label:'Stock actual', value:`${qty(r.stock_actual)} ${unidad}`, hint:'Cantidad disponible hoy', color:'text-primary' },
+    { label:'Comprado', value:`${qty(r.compras_cantidad)} ${unidad}`, hint:`Bs ${money(r.compras_importe)} · ${r.compras_documentos||0} compra(s)`, color:'text-teal-8' },
+    { label:'Vendido', value:`${qty(r.ventas_cantidad)} ${unidad}`, hint:`Bs ${money(r.ventas_importe)} · ${r.ventas_documentos||0} venta(s)`, color:'text-indigo-8' },
+    { label:'Utilidad de ventas', value:`Bs ${money(r.utilidad)}`, hint:'Venta menos costo registrado', color:Number(r.utilidad)>=0?'text-positive':'text-negative' },
+    { label:'Última compra', value:formatDate(r.ultima_compra), hint:`Última venta: ${formatDate(r.ultima_venta)}`, color:'text-grey-9' }
+  ]
+})
+function openMovements (row) { current.value = { ...row }; movementsTab.value = 'compras'; movements.value = { compras:[], ventas:[], resumen:{} }; movementsDialog.value = true; loadMovements() }
+function loadMovements () {
+  if (!current.value.id) return
+  movementsLoading.value = true
+  proxy.$axios.get(`/productos/${current.value.id}/movimientos`, { params:{ desde:range.desde || undefined, hasta:range.hasta || undefined } })
+    .then(({ data }) => { movements.value = data })
+    .catch(e => proxy.$alert.error(e.response?.data?.message || 'No se pudieron cargar los movimientos'))
+    .finally(() => { movementsLoading.value = false })
+}
+function openAudit (row) {
+  current.value = { ...row }; audit.value = []; auditDialog.value = true; auditLoading.value = true
+  proxy.$axios.get(`/productos/${row.id}/auditoria`)
+    .then(({ data }) => { audit.value = data.registros })
+    .catch(e => proxy.$alert.error(e.response?.data?.message || 'No se pudo cargar la auditoría'))
+    .finally(() => { auditLoading.value = false })
+}
+const auditIcon = evento => ({ Creado:'add_circle', Modificado:'edit', Eliminado:'delete', Restaurado:'restore' })[evento] || 'circle'
+const auditColor = evento => ({ Creado:'positive', Modificado:'primary', Eliminado:'negative', Restaurado:'orange' })[evento] || 'deep-purple'
+const auditValue = value => (value === null || value === undefined || value === '') ? '—' : String(value)
 function remove (row) {
   proxy.$alert.dialog(`¿Eliminar ${row.nombre}?`).onOk(() => proxy.$axios.delete(`/productos/${row.id}`)
     .then(() => { proxy.$alert.success('Producto eliminado'); load() })
@@ -351,4 +477,8 @@ onMounted(() => { load(); loadCatalogs() })
 
 <style scoped>
 .drop-photo{border:1px dashed transparent;transition:.15s}.drop-photo:hover{border-color:#c62828;background:#fff0ef}
+.tight-table :deep(th),.tight-table :deep(td),.tight-table th,.tight-table td{padding:2px 6px!important;font-size:12px;height:auto!important}
+.tight-table :deep(thead th),.tight-table thead th{font-size:11px;text-transform:uppercase;color:#616161;white-space:nowrap}
+.tight-table :deep(tbody tr){height:30px}
+.tight-table :deep(.q-table__bottom){min-height:34px;padding:0 8px;font-size:12px}
 </style>

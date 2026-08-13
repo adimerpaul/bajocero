@@ -1,7 +1,7 @@
 <template>
   <q-page class="q-pa-sm">
     <div class="row items-center q-mb-sm"><div><div class="text-subtitle1 text-weight-bold">Ventas</div><div class="text-caption text-grey-7">Resumen e historial de ventas</div></div><q-space/>
-      <q-btn-dropdown dense flat color="primary" icon="download" label="Exportar" no-caps class="q-mr-xs"><q-list dense><q-item clickable v-close-popup @click="download('excel')"><q-item-section avatar><q-icon name="table_view" color="positive"/></q-item-section><q-item-section>Excel</q-item-section></q-item><q-item clickable v-close-popup @click="download('pdf')"><q-item-section avatar><q-icon name="picture_as_pdf" color="negative"/></q-item-section><q-item-section>PDF</q-item-section></q-item></q-list></q-btn-dropdown>
+      <q-btn-dropdown dense flat color="primary" icon="download" label="Exportar" no-caps class="q-mr-xs" :loading="!!exporting" :disable="!!exporting"><q-list dense style="min-width:230px"><q-item clickable v-close-popup @click="download('excel')"><q-item-section avatar><q-icon name="table_view" color="positive"/></q-item-section><q-item-section><q-item-label>Excel</q-item-label><q-item-label caption>Ventas, productos y resumen</q-item-label></q-item-section></q-item><q-item clickable v-close-popup @click="download('pdf')"><q-item-section avatar><q-icon name="picture_as_pdf" color="negative"/></q-item-section><q-item-section><q-item-label>PDF</q-item-label><q-item-label caption>Listado para imprimir</q-item-label></q-item-section></q-item></q-list></q-btn-dropdown>
       <q-btn v-if="can('Crear Ventas')" dense unelevated color="positive" icon="add_shopping_cart" label="Nueva venta" no-caps to="/ventas/nueva"/>
     </div>
 
@@ -39,7 +39,7 @@ import {computed,getCurrentInstance,reactive,ref} from 'vue'
 import {printSale} from '../../addons/ventaPrint'
 // Fecha local (no UTC): con toISOString, después de las 20:00 en Bolivia el "hoy" saltaría al día siguiente.
 const today=()=>{const d=new Date(),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`}
-const {proxy}=getCurrentInstance(),rows=ref([]),loading=ref(false),search=ref(''),from=ref(today()),to=ref(today()),fromTime=ref('00:01'),toTime=ref('23:59'),user=ref(null),dialog=ref(false),selected=reactive({}),summary=reactive({efectivo:0,qr:0,total:0,descuento:0,cantidad:0,usuarios:[]})
+const {proxy}=getCurrentInstance(),rows=ref([]),loading=ref(false),search=ref(''),from=ref(today()),to=ref(today()),fromTime=ref('00:01'),toTime=ref('23:59'),user=ref(null),dialog=ref(false),exporting=ref(null),selected=reactive({}),summary=reactive({efectivo:0,qr:0,total:0,descuento:0,cantidad:0,usuarios:[]})
 const pagination=ref({page:1,rowsPerPage:15,rowsNumber:0}),money=v=>Number(v||0).toFixed(2),can=p=>proxy.$store.hasPermission(p)
 // Cantidad sin ceros de relleno: 2 para piezas, 0.355 para peso.
 const qty=v=>{const n=Number(v||0);return Number.isInteger(n)?String(n):String(parseFloat(n.toFixed(3)))}
@@ -54,7 +54,12 @@ function loadSummary(){proxy.$axios.get('/ventas-resumen',{params:params()}).the
 function onRequest({pagination:p}){loading.value=true;proxy.$axios.get('/ventas',{params:{...params(),page:p.page,per_page:p.rowsPerPage}}).then(r=>{rows.value=r.data.data;pagination.value={...p,rowsNumber:r.data.total};loadSummary()}).catch(e=>proxy.$alert.error(e.response?.data?.message||'No se pudieron cargar las ventas')).finally(()=>loading.value=false)}
 function showDetail(row){proxy.$axios.get(`/ventas/${row.id}`).then(r=>{Object.assign(selected,r.data);dialog.value=true})}function printRow(row){proxy.$axios.get(`/ventas/${row.id}`).then(r=>printSale(r.data))}
 function cancel(row){proxy.$alert.dialog(`¿Anular la venta ${row.numero}? El stock será restaurado.`).onOk(()=>proxy.$axios.put(`/ventas/${row.id}/anular`).then(()=>{proxy.$alert.success('Venta anulada');load()}).catch(e=>proxy.$alert.error(e.response?.data?.message||'No se pudo anular')))}
-async function download(type){try{const response=await proxy.$axios.get(`/ventas-exportar/${type}`,{params:params(),responseType:'blob'});const url=URL.createObjectURL(response.data),a=document.createElement('a');a.href=url;a.download=`ventas.${type==='excel'?'xlsx':'pdf'}`;a.click();URL.revokeObjectURL(url)}catch{proxy.$alert.error('No se pudo exportar el reporte')}}
+// El nombre lleva el rango consultado para que no se pisen los archivos en la carpeta de descargas.
+function exportName(type){const ext=type==='excel'?'xlsx':'pdf',rango=from.value===to.value?from.value:`${from.value}_a_${to.value}`;return `ventas_${rango||'todas'}.${ext}`}
+async function download(type){if(exporting.value)return;exporting.value=type
+  try{const response=await proxy.$axios.get(`/ventas-exportar/${type}`,{params:params(),responseType:'blob'});const url=URL.createObjectURL(response.data),a=document.createElement('a');a.href=url;a.download=exportName(type);a.click();URL.revokeObjectURL(url);proxy.$alert.success('Reporte generado',type==='excel'?'Hojas: Ventas, Productos y Resumen':'Descarga lista')}
+  catch{proxy.$alert.error('No se pudo exportar el reporte')}
+  finally{exporting.value=null}}
 load()
 </script>
 

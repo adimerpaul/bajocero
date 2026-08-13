@@ -36,6 +36,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/categorias', [ProductoController::class, 'storeCategoria']);
     Route::put('/categorias/{categoria}', [ProductoController::class, 'updateCategoria']);
     Route::delete('/categorias/{categoria}', [ProductoController::class, 'destroyCategoria']);
+    Route::get('/productos/{producto}/movimientos', [ProductoController::class, 'movimientos']);
+    Route::get('/productos/{producto}/auditoria', [ProductoController::class, 'auditoria']);
     Route::patch('/productos/{producto}/codigo-barras', [ProductoController::class, 'updateBarcode']);
     Route::post('/productos', [ProductoController::class, 'store']);
     Route::put('/productos/{producto}', [ProductoController::class, 'update']);

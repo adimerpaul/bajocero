@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exports\VentasExport;
+use App\Models\Configuracion;
 use App\Models\Lote;
 use App\Models\Producto;
 use App\Models\User;
@@ -87,8 +88,53 @@ class VentaController extends Controller
     public function exportExcel(Request $request)
     {
         $this->authorizeAction($request, 'Ver Ventas');
+        $ventas = $this->filteredQuery($request)->with('detalles')->withCount('detalles')->latest('fecha')->get();
+        $productos = DB::table('venta_detalles')
+            ->whereNull('venta_detalles.deleted_at')
+            ->whereIn('venta_id', $this->filteredQuery($request)->where('estado', 'COMPLETADA')->select('id'))
+            ->selectRaw('nombre, unidad, SUM(cantidad) as cantidad, SUM(total) as total')
+            ->groupBy('nombre', 'unidad')->orderByDesc('total')->limit(15)->get();
 
-        return Excel::download(new VentasExport($this->filteredQuery($request)->latest('fecha')->get()), 'ventas_'.now()->format('Ymd_His').'.xlsx');
+        return Excel::download(
+            new VentasExport($ventas, $productos, $this->reportMeta($request)),
+            'ventas_'.now()->format('Ymd_His').'.xlsx'
+        );
+    }
+
+    /** Encabezado del reporte: empresa, período, filtros aplicados y quién exportó. */
+    private function reportMeta(Request $request): array
+    {
+        $config = Configuracion::first();
+        $from = $request->date('desde');
+        $to = $request->date('hasta');
+        $fromTime = substr($this->normalizeTime($request->input('hora_desde'), '00:00:00') ?? '00:00', 0, 5);
+        $toTime = substr($this->normalizeTime($request->input('hora_hasta'), '23:59:59') ?? '23:59', 0, 5);
+
+        $period = 'Todos los registros';
+        if ($from || $to) {
+            $period = ($from ? $from->format('d/m/Y') : 'inicio').' '.$fromTime.'  al  '.($to ? $to->format('d/m/Y') : 'hoy').' '.$toTime;
+        }
+
+        $filters = [];
+        if ($userId = $request->integer('user_id')) {
+            $filters[] = 'Usuario: '.(User::find($userId)?->name ?? $userId);
+        }
+        if ($search = trim((string) $request->input('q'))) {
+            $filters[] = 'Búsqueda: "'.$search.'"';
+        }
+
+        $user = $request->user();
+
+        return [
+            'empresa' => $config?->nombre_empresa ?: 'Bajo Cero',
+            'nit' => $config?->nit,
+            'direccion' => $config?->direccion,
+            'telefono' => $config?->telefono,
+            'periodo' => $period,
+            'filtros' => $filters ? implode('   ·   ', $filters) : 'Sin filtros adicionales',
+            'exportado_por' => trim(($user?->name ?? '-').($user?->username ? ' ('.$user->username.')' : '')),
+            'exportado_en' => now()->format('d/m/Y H:i'),
+        ];
     }
 
     public function exportPdf(Request $request)

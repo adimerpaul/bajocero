@@ -381,6 +381,111 @@ class ProductoController extends Controller
         return response()->json(['message' => 'Producto eliminado correctamente']);
     }
 
+    /** Compras y ventas del producto, con totales del rango consultado. */
+    public function movimientos(Request $request, Producto $producto)
+    {
+        $this->authorizeAction($request, 'Ver Productos');
+        $purchases = fn () => $this->movimientosCompra($request, $producto);
+        $sales = fn () => $this->movimientosVenta($request, $producto);
+
+        $comprasResumen = $purchases()->where('c.estado', 'COMPLETADA')
+            ->selectRaw('COUNT(DISTINCT c.id) as documentos, COALESCE(SUM(d.cantidad),0) as cantidad, COALESCE(SUM(d.total),0) as importe, MAX(c.fecha) as ultima')
+            ->first();
+        $ventasResumen = $sales()->where('v.estado', 'COMPLETADA')
+            ->selectRaw('COUNT(DISTINCT v.id) as documentos, COALESCE(SUM(d.cantidad),0) as cantidad, COALESCE(SUM(d.total),0) as importe, COALESCE(SUM(d.total - d.precio_compra * d.cantidad),0) as utilidad, MAX(v.fecha) as ultima')
+            ->first();
+
+        return response()->json([
+            'producto' => $producto->only(['id', 'codigo', 'nombre', 'unidad', 'precio_compra', 'precio_venta', 'stock_inicial', 'foto']),
+            'compras' => $purchases()->orderByDesc('c.fecha')->orderByDesc('d.id')->limit(300)->get([
+                'c.numero', 'c.fecha', 'c.estado', 'c.usuario_nombre', 'c.proveedor_nombre', 'c.numero_factura',
+                'd.id', 'd.cantidad', 'd.precio_unitario', 'd.total', 'd.lote', 'd.fecha_vencimiento',
+            ]),
+            'ventas' => $sales()->orderByDesc('v.fecha')->orderByDesc('d.id')->limit(300)->get([
+                'v.numero', 'v.fecha', 'v.estado', 'v.usuario_nombre', 'v.tipo_pago',
+                'd.id', 'd.cantidad', 'd.precio_venta', 'd.descuento', 'd.total', 'd.precio_compra',
+            ]),
+            'resumen' => [
+                'stock_actual' => (float) $producto->stock_inicial,
+                'compras_documentos' => (int) $comprasResumen->documentos,
+                'compras_cantidad' => round((float) $comprasResumen->cantidad, 3),
+                'compras_importe' => round((float) $comprasResumen->importe, 2),
+                'ultima_compra' => $comprasResumen->ultima,
+                'ventas_documentos' => (int) $ventasResumen->documentos,
+                'ventas_cantidad' => round((float) $ventasResumen->cantidad, 3),
+                'ventas_importe' => round((float) $ventasResumen->importe, 2),
+                'utilidad' => round((float) $ventasResumen->utilidad, 2),
+                'ultima_venta' => $ventasResumen->ultima,
+            ],
+        ]);
+    }
+
+    private function movimientosCompra(Request $request, Producto $producto)
+    {
+        return DB::table('compra_detalles as d')
+            ->join('compras as c', 'c.id', '=', 'd.compra_id')
+            ->where('d.producto_id', $producto->id)
+            ->whereNull('c.deleted_at')
+            ->when($request->input('desde'), fn ($q, $v) => $q->whereDate('c.fecha', '>=', $v))
+            ->when($request->input('hasta'), fn ($q, $v) => $q->whereDate('c.fecha', '<=', $v));
+    }
+
+    private function movimientosVenta(Request $request, Producto $producto)
+    {
+        return DB::table('venta_detalles as d')
+            ->join('ventas as v', 'v.id', '=', 'd.venta_id')
+            ->where('d.producto_id', $producto->id)
+            ->whereNull('v.deleted_at')
+            ->whereNull('d.deleted_at')
+            ->when($request->input('desde'), fn ($q, $v) => $q->whereDate('v.fecha', '>=', $v))
+            ->when($request->input('hasta'), fn ($q, $v) => $q->whereDate('v.fecha', '<=', $v));
+    }
+
+    /** Bitácora de cambios del producto: qué campo cambió, de qué a qué, cuándo y quién. */
+    public function auditoria(Request $request, Producto $producto)
+    {
+        $this->authorizeAction($request, 'Ver Productos');
+        $etiquetas = [
+            'codigo' => 'Código', 'codigo_barras' => 'Código de barras', 'nombre' => 'Producto',
+            'categoria' => 'Categoría', 'categoria_id' => 'Categoría (id)', 'unidad' => 'Unidad',
+            'precio_compra' => 'Precio compra', 'precio_venta' => 'Precio venta',
+            'stock_inicial' => 'Cantidad en stock', 'foto' => 'Fotografía', 'deleted_at' => 'Eliminado',
+        ];
+        $eventos = ['created' => 'Creado', 'updated' => 'Modificado', 'deleted' => 'Eliminado', 'restored' => 'Restaurado'];
+
+        $registros = DB::table('audits')
+            ->leftJoin('users', 'users.id', '=', 'audits.user_id')
+            ->where('audits.auditable_type', Producto::class)
+            ->where('audits.auditable_id', $producto->id)
+            ->orderByDesc('audits.id')
+            ->limit(300)
+            ->get(['audits.id', 'audits.event', 'audits.old_values', 'audits.new_values', 'audits.created_at', 'audits.ip_address', 'users.name as usuario', 'users.username']);
+
+        return response()->json([
+            'producto' => $producto->only(['id', 'codigo', 'nombre', 'unidad']),
+            'registros' => $registros->map(function ($registro) use ($etiquetas, $eventos) {
+                $old = json_decode($registro->old_values, true) ?: [];
+                $new = json_decode($registro->new_values, true) ?: [];
+                $campos = collect(array_keys($new + $old))
+                    ->reject(fn ($campo) => in_array($campo, ['created_at', 'updated_at'], true))
+                    ->map(fn ($campo) => [
+                        'campo' => $etiquetas[$campo] ?? $campo,
+                        'antes' => $old[$campo] ?? null,
+                        'despues' => $new[$campo] ?? null,
+                    ])->values();
+
+                return [
+                    'id' => $registro->id,
+                    'evento' => $eventos[$registro->event] ?? $registro->event,
+                    'fecha' => $registro->created_at,
+                    'usuario' => $registro->usuario ?: ($registro->username ?: 'Sistema'),
+                    'ip' => $registro->ip_address,
+                    'campos' => $campos,
+                ];
+            }),
+        ]);
+    }
+
     private function validatedData(Request $request, ?Producto $producto = null): array
     {
         $data = $request->validate([

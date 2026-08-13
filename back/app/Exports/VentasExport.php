@@ -3,25 +3,23 @@
 namespace App\Exports;
 
 use Illuminate\Support\Collection;
-use Maatwebsite\Excel\Concerns\FromCollection;
-use Maatwebsite\Excel\Concerns\ShouldAutoSize;
-use Maatwebsite\Excel\Concerns\WithHeadings;
+use Maatwebsite\Excel\Concerns\WithMultipleSheets;
 
-class VentasExport implements FromCollection, ShouldAutoSize, WithHeadings
+/** Libro de ventas: hojas filtrables de ventas y de productos vendidos + resumen. */
+class VentasExport implements WithMultipleSheets
 {
-    public function __construct(private readonly Collection $ventas) {}
+    public function __construct(
+        private readonly Collection $ventas,
+        private readonly Collection $productos,
+        private readonly array $meta,
+    ) {}
 
-    public function collection(): Collection
+    public function sheets(): array
     {
-        return $this->ventas->map(fn ($v) => [
-            $v->numero, $v->fecha->format('d/m/Y H:i'), $v->usuario_nombre,
-            $v->tipo_pago, $v->monto_efectivo, $v->monto_qr,
-            $v->subtotal, $v->descuento, $v->total, $v->estado,
-        ]);
-    }
-
-    public function headings(): array
-    {
-        return ['Nº Venta', 'Fecha', 'Usuario', 'Tipo pago', 'Efectivo', 'QR', 'Subtotal', 'Descuento', 'Total', 'Estado'];
+        return [
+            new VentasHojaVentas($this->ventas, $this->meta),
+            new VentasHojaProductos($this->ventas, $this->meta),
+            new VentasHojaResumen($this->ventas, $this->productos, $this->meta),
+        ];
     }
 }
