@@ -5,6 +5,8 @@ export const useCounterStore = defineStore('counter', {
     isLogged: false,
     user: {},
     permissions: [],
+    // Se marca cuando una llamada al API falla sin respuesta del servidor.
+    offline: false,
   }),
 
   getters: {

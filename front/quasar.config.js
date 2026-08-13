@@ -133,14 +133,48 @@ export default defineConfig((/* ctx */) => {
 
     // https://v2.quasar.dev/quasar-cli-vite/developing-pwa/configuring-pwa
     pwa: {
-      workboxMode: 'GenerateSW' // 'GenerateSW' or 'InjectManifest'
+      workboxMode: 'GenerateSW', // 'GenerateSW' or 'InjectManifest'
+
+      // El service worker deja la aplicación instalada en el equipo: sin internet
+      // igual abre, entra con la sesión guardada y se puede navegar por los menús.
+      extendGenerateSWOptions (cfg) {
+        // Cualquier ruta (/ventas, /productos, ...) se resuelve con el index cacheado.
+        cfg.navigateFallback = 'index.html'
+        cfg.navigateFallbackDenylist = [/^\/api\//]
+        cfg.cleanupOutdatedCaches = true
+        cfg.clientsClaim = true
+        cfg.skipWaiting = true
+        cfg.runtimeCaching = [
+          {
+            // Fotos de productos, avatares y logo: se muestran aunque no haya red.
+            urlPattern: /(\/images\/.*\.(?:png|jpg|jpeg|webp|svg|gif)|\/api\/imagen\/.+)$/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'imagenes-bajocero',
+              expiration: { maxEntries: 400, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] }
+            }
+          },
+          {
+            // Datos del API: siempre se prefiere el servidor; si no responde en 8
+            // segundos se entrega la última respuesta guardada (solo lectura).
+            urlPattern: ({ url, request }) => request.method === 'GET' && /\/api\//.test(url.pathname),
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'api-bajocero',
+              networkTimeoutSeconds: 8,
+              expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 7 },
+              cacheableResponse: { statuses: [200] }
+            }
+          }
+        ]
+      }
       // swFilename: 'sw.js',
       // manifestFilename: 'manifest.json',
       // extendManifestJson (json) {},
       // useCredentialsForManifestTag: true,
       // injectPwaMetaTags: false,
       // extendPWACustomSWConf (esbuildConf) {},
-      // extendGenerateSWOptions (cfg) {},
       // extendInjectManifestOptions (cfg) {}
     },
 

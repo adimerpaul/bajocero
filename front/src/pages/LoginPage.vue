@@ -108,6 +108,8 @@
 
 <script setup>
 import { ref, computed, getCurrentInstance, onMounted } from 'vue'
+import { cacheCompanyLogo, companyData, companyLogo as cachedLogo, saveCompany } from '../addons/empresa'
+import { cacheAvatar, saveSession } from '../addons/sesion'
 
 const { proxy } = getCurrentInstance()
 
@@ -125,17 +127,17 @@ const loadingChange          = ref(false)
 let   tempToken              = ''
 
 const year = computed(() => new Date().getFullYear())
-const cachedCompany = JSON.parse(localStorage.getItem('empresaBajoCero') || '{}')
-const companyName = ref(cachedCompany.nombre_empresa || 'Bajo Cero')
-const companyLogo = ref(cachedCompany.logo_url || '/bajo-cero-logo.svg')
+const companyName = ref(companyData().nombre_empresa || 'Bajo Cero')
+const companyLogo = ref(cachedLogo())
 
 onMounted(() => {
-  proxy.$axios.get('/configuracion').then(({ data }) => {
-    data.logo_url = data.logo ? `${proxy.$imgBase}/images/${data.logo}` : null
-    companyName.value = data.nombre_empresa || 'Bajo Cero'
-    companyLogo.value = data.logo_url || '/bajo-cero-logo.svg'
-    localStorage.setItem('empresaBajoCero', JSON.stringify(data))
-  })
+  // Sin conexión se muestra el nombre y el logo guardados en localStorage.
+  proxy.$axios.get('/configuracion').then(async ({ data }) => {
+    const company = saveCompany(data, proxy.$imgBase)
+    companyName.value = company.nombre_empresa || 'Bajo Cero'
+    await cacheCompanyLogo(proxy.$axios, company)
+    companyLogo.value = cachedLogo()
+  }).catch(() => { /* noop */ })
 })
 
 function login () {
@@ -152,12 +154,11 @@ function login () {
         newPasswordConfirm.value = ''
         vista.value = 'cambiar'
       } else {
-        const perms = (user.permissions || []).map(p => p.name)
+        // Token, usuario (nombre), permisos y foto quedan guardados: con eso se
+        // entra y se navega aunque después no haya internet.
         proxy.$store.isLogged    = true
-        proxy.$store.permissions = perms
-        localStorage.setItem('tokenBajoCero', token)
-        localStorage.setItem('permissionsBajoCero', JSON.stringify(perms))
-        localStorage.setItem('user', JSON.stringify(user))
+        proxy.$store.permissions = saveSession(user, token)
+        cacheAvatar(proxy.$axios, user)
         proxy.$alert.success('Bienvenido ' + user.name)
         proxy.$router.push('/')
       }
@@ -177,12 +178,9 @@ function cambiarPassword () {
   })
     .then(() => {
       const user = proxy.$store.user
-      const perms = (user.permissions || []).map(p => p.name)
       proxy.$store.isLogged    = true
-      proxy.$store.permissions = perms
-      localStorage.setItem('tokenBajoCero', tempToken)
-      localStorage.setItem('permissionsBajoCero', JSON.stringify(perms))
-      localStorage.setItem('user', JSON.stringify(user))
+      proxy.$store.permissions = saveSession(user, tempToken)
+      cacheAvatar(proxy.$axios, user)
       proxy.$alert.success('Contraseña actualizada. ¡Bienvenido!')
       proxy.$router.push('/')
     })

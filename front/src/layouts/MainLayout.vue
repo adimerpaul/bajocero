@@ -23,15 +23,16 @@
         <q-btn-dropdown flat unelevated no-caps dropdown-icon="expand_more">
           <template v-slot:label>
             <div class="header-user row items-center no-wrap">
-              <q-avatar rounded size="30px" style="border:2px solid #e4eae7">
-                <img :src="$store.user.avatar ? $imgBase + '/images/' + $store.user.avatar : $imgBase + '/images/default.png'"
-                     style="object-fit:cover;width:100%;height:100%"
-                     @error="$event.target.src = $imgBase + '/images/default.png'" />
+              <q-avatar rounded size="30px" style="border:2px solid #e4eae7" color="grey-3" text-color="grey-8"
+                        :icon="userAvatar ? undefined : 'person'">
+                <img v-if="userAvatar" :src="userAvatar" style="object-fit:cover;width:100%;height:100%"
+                     @error="userAvatar = null" />
               </q-avatar>
               <div class="text-left" style="line-height: 1">
                 <div class="ellipsis" style="max-width: 130px;">
-                  {{ $store.user.username }}
+                  {{ $store.user.name || $store.user.username }}
                 </div>
+                <div v-if="offline" class="text-caption text-negative">Sin conexión</div>
               </div>
             </div>
           </template>
@@ -118,14 +119,21 @@
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, onMounted, ref } from 'vue'
+import { computed, getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue'
+import { cacheCompanyLogo, companyData, companyLogo as cachedLogo, saveCompany } from '../addons/empresa'
+import { avatarSrc, cacheAvatar, clearSession } from '../addons/sesion'
 
 const { proxy } = getCurrentInstance()
 
 const leftDrawerOpen = ref(false)
-const cachedCompany = JSON.parse(localStorage.getItem('empresaBajoCero') || '{}')
-const companyName = ref(cachedCompany.nombre_empresa || 'Bajo Cero')
-const companyLogo = ref(cachedCompany.logo_url || '/bajo-cero-logo.svg')
+const companyName = ref(companyData().nombre_empresa || 'Bajo Cero')
+const companyLogo = ref(cachedLogo())
+// Foto del usuario guardada en base64: se ve igual sin conexión.
+const userAvatar = ref(avatarSrc(proxy.$store.user, proxy.$imgBase))
+// El aviso sale cuando el navegador se queda sin red o cuando una llamada al API
+// no obtiene respuesta (navigator.onLine solo no es confiable).
+const offline = computed(() => proxy.$store.offline || sinRed.value)
+const sinRed = ref(!navigator.onLine)
 
 const links = [
   { title: 'Inicio',    icon: 'dashboard',   link: '/',         can: null },
@@ -152,22 +160,36 @@ function toggleLeftDrawer () {
   leftDrawerOpen.value = !leftDrawerOpen.value
 }
 
+const marcarEstadoRed = () => { sinRed.value = !navigator.onLine }
+
 onMounted(() => {
-  proxy.$axios.get('/configuracion').then(({ data }) => {
-    data.logo_url = data.logo ? `${proxy.$imgBase}/images/${data.logo}` : null
-    companyName.value = data.nombre_empresa || 'Bajo Cero'
-    companyLogo.value = data.logo_url || '/bajo-cero-logo.svg'
-    localStorage.setItem('empresaBajoCero', JSON.stringify(data))
-  })
+  window.addEventListener('online', marcarEstadoRed)
+  window.addEventListener('offline', marcarEstadoRed)
+  // Sin conexión se conservan los datos ya guardados en localStorage.
+  proxy.$axios.get('/configuracion').then(async ({ data }) => {
+    const company = saveCompany(data, proxy.$imgBase)
+    companyName.value = company.nombre_empresa || 'Bajo Cero'
+    await cacheCompanyLogo(proxy.$axios, company)
+    companyLogo.value = cachedLogo()
+  }).catch(() => { /* noop */ })
 })
+
+onUnmounted(() => {
+  window.removeEventListener('online', marcarEstadoRed)
+  window.removeEventListener('offline', marcarEstadoRed)
+})
+
+// Cuando /me o el login traen otra foto, se refresca la copia en base64.
+watch(() => proxy.$store.user.avatar, async () => {
+  await cacheAvatar(proxy.$axios, proxy.$store.user)
+  userAvatar.value = avatarSrc(proxy.$store.user, proxy.$imgBase)
+}, { immediate: true })
 
 function logout () {
   proxy.$alert.dialog('¿Desea salir del sistema?').onOk(() => {
     proxy.$axios.post('/logout').finally(() => {
       proxy.$store.logout()
-      localStorage.removeItem('tokenBajoCero')
-      localStorage.removeItem('permissionsBajoCero')
-      localStorage.removeItem('user')
+      clearSession()
       delete proxy.$axios.defaults.headers.common['Authorization']
       proxy.$router.push('/login')
     })

@@ -4,6 +4,7 @@ use App\Http\Controllers\AlmacenController;
 use App\Http\Controllers\BajaController;
 use App\Http\Controllers\CompraController;
 use App\Http\Controllers\ConfiguracionController;
+use App\Http\Controllers\ImagenController;
 use App\Http\Controllers\ProductoController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\VentaController;
@@ -11,6 +12,9 @@ use Illuminate\Support\Facades\Route;
 
 Route::post('/login', [UserController::class, 'login']);
 Route::get('/configuracion', [ConfiguracionController::class, 'show']);
+// Fotos (avatar, logo, productos) servidas por el API para que el frontend pueda
+// guardarlas en base64 y mostrarlas sin conexión.
+Route::get('/imagen/{archivo}', [ImagenController::class, 'show'])->where('archivo', '[A-Za-z0-9._-]+');
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [UserController::class, 'me']);

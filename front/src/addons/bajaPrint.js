@@ -1,5 +1,5 @@
 import { Printd } from 'printd'
-import { companyData } from './empresa'
+import { companyData, companyLogo } from './empresa'
 
 const css = `
 @page{size:80mm auto;margin:4mm}body{margin:0}.ticket{font-family:Arial,sans-serif;font-size:11px;color:#111}
@@ -16,7 +16,7 @@ const qty = (value, unit) => Number(value || 0).toFixed(unit === 'KG' ? 3 : 0)
 
 export function printBaja (baja) {
   const company = companyData()
-  const logoUrl = company.logo_url || `${window.location.origin}/bajo-cero-logo.svg`
+  const logoUrl = companyLogo() // copia en base64 de localStorage: imprime sin conexión
   const rows = (baja.detalles || []).map(item => `<tr><td>${esc(item.nombre)}<br><small>${qty(item.cantidad, item.unidad)} ${esc(item.unidad)} × ${money(item.precio_compra)}${item.observacion ? ` · ${esc(item.observacion)}` : ''}</small></td><td class="right">${money(item.total)}</td></tr>`).join('')
   const element = document.createElement('div')
   element.innerHTML = `<div class="ticket"><img class="logo" src="${logoUrl}" alt="Bajo Cero"><h2>${esc(company.nombre_empresa||'Bajo Cero')}</h2><div class="center">${esc(company.direccion||'')}<br>Tel: ${esc(company.telefono||'')} ${company.nit?`· NIT: ${esc(company.nit)}`:''}<br><b>COMPROBANTE DE BAJA</b></div><div class="line"></div>
