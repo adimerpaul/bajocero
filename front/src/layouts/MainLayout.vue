@@ -91,6 +91,9 @@
               <q-item-section>
                 <q-item-label class="drawer-menu-link__label" lines="1">{{ link.title }}</q-item-label>
               </q-item-section>
+              <q-item-section v-if="link.link === '/ventas/offline' && ventasPendientes" side>
+                <q-badge color="orange-8" text-color="white" :label="ventasPendientes" />
+              </q-item-section>
             </q-item>
           </q-list>
 
@@ -122,8 +125,12 @@
 import { computed, getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue'
 import { cacheCompanyLogo, companyData, companyLogo as cachedLogo, saveCompany } from '../addons/empresa'
 import { avatarSrc, cacheAvatar, clearSession } from '../addons/sesion'
+import { ventasPorEnviar } from '../addons/ventasOffline'
 
 const { proxy } = getCurrentInstance()
+
+// Ventas cobradas sin conexión que todavía no se enviaron: se avisa en el menú.
+const ventasPendientes = ref(ventasPorEnviar().length)
 
 const leftDrawerOpen = ref(false)
 const companyName = ref(companyData().nombre_empresa || 'Bajo Cero')
@@ -141,6 +148,8 @@ const links = [
   { title: 'Productos', icon: 'inventory_2', link: '/productos', can: 'Ver Productos' },
   { title: 'Nueva venta', icon: 'point_of_sale', link: '/ventas/nueva', can: 'Crear Ventas' },
   { title: 'Ventas', icon: 'receipt_long', link: '/ventas', can: 'Ver Ventas' },
+  { title: 'Nueva venta offline', icon: 'wifi_off', link: '/ventas/offline/nueva', can: 'Crear Ventas Offline' },
+  { title: 'Ventas offline', icon: 'cloud_queue', link: '/ventas/offline', can: 'Crear Ventas Offline' },
   { title: 'Nueva compra', icon: 'add_business', link: '/compras/nueva', can: 'Crear Compras' },
   { title: 'Compras', icon: 'shopping_bag', link: '/compras', can: 'Ver Compras' },
   { title: 'Proveedores', icon: 'groups', link: '/proveedores', can: 'Ver Compras' },
@@ -178,6 +187,8 @@ onUnmounted(() => {
   window.removeEventListener('online', marcarEstadoRed)
   window.removeEventListener('offline', marcarEstadoRed)
 })
+
+watch(() => proxy.$route.path, () => { ventasPendientes.value = ventasPorEnviar().length })
 
 // Cuando /me o el login traen otra foto, se refresca la copia en base64.
 watch(() => proxy.$store.user.avatar, async () => {

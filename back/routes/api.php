@@ -51,6 +51,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/ventas', [VentaController::class, 'index']);
     Route::post('/ventas', [VentaController::class, 'store']);
+    Route::post('/ventas-offline/verificar', [VentaController::class, 'verificarOffline']);
     Route::get('/ventas-resumen', [VentaController::class, 'summary']);
     Route::get('/dashboard', [VentaController::class, 'dashboard']);
     Route::get('/ventas-exportar/excel', [VentaController::class, 'exportExcel']);
