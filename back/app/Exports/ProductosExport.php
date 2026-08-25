@@ -27,6 +27,11 @@ class ProductosExport extends DefaultValueBinder implements FromCollection, Shou
             $p->unidad,
             (float) $p->precio_compra,
             (float) $p->precio_venta,
+            (float) $p->precio_1,
+            (float) $p->precio_2,
+            (float) $p->precio_3,
+            (float) $p->precio_4,
+            (float) $p->precio_5,
             (float) $p->stock_inicial,
             round((float) $p->stock_inicial * (float) $p->precio_compra, 2),
             round((float) $p->stock_inicial * (float) $p->precio_venta, 2),
@@ -35,7 +40,7 @@ class ProductosExport extends DefaultValueBinder implements FromCollection, Shou
 
     public function headings(): array
     {
-        return ['Código', 'Código barras', 'Producto', 'Categoría', 'Unidad', 'P. compra', 'P. venta', 'Stock', 'Valor compra', 'Valor venta'];
+        return ['Código', 'Código barras', 'Producto', 'Categoría', 'Unidad', 'P. compra', 'P. venta', 'Precio 1', 'Precio 2', 'Precio 3', 'Precio 4', 'Precio 5', 'Stock', 'Valor compra', 'Valor venta'];
     }
 
     public function bindValue(Cell $cell, $value): bool

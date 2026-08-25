@@ -44,12 +44,14 @@
             </q-btn>
           </template>
         </q-select>
+        <q-toggle v-model="showLevels" dense size="sm" color="primary" label="Ver 5 precios" class="col-6 col-md-2 text-caption"/>
       </q-card-section>
-      <q-table dense flat class="tight-table" :rows="rows" :columns="columns" row-key="id" :loading="loading"
+      <q-table dense flat class="tight-table" :visible-columns="visibleColumns" :rows="rows" :columns="columns" row-key="id" :loading="loading"
                v-model:pagination="pagination" :rows-per-page-options="[10,20,50,100,0]" @request="onRequest" binary-state-sort>
         <template #body-cell-foto="p"><q-td :props="p" class="drop-photo" @dragover.prevent @drop.prevent="dropPhoto($event,p.row)"><q-avatar rounded size="30px" color="grey-2"><img v-if="p.row.foto" :src="photoUrl(p.row.foto)"/><q-icon v-else name="add_photo_alternate" color="grey-5"/></q-avatar><q-tooltip>Arrastra aquí una imagen o URL</q-tooltip></q-td></template>
         <template #body-cell-precio_compra="p"><q-td :props="p">Bs {{ money(p.value) }}</q-td></template>
         <template #body-cell-precio_venta="p"><q-td :props="p">Bs {{ money(p.value) }}</q-td></template>
+        <template v-for="n in NIVELES" :key="n" #[`body-cell-precio_${n}`]="p"><q-td :props="p">Bs {{ money(p.value) }}</q-td></template>
         <template #body-cell-codigo_barras="p"><q-td :props="p"><q-input v-model="p.row.codigo_barras" dense borderless placeholder="Escanear o escribir" input-class="text-caption" @keyup.enter="$event.target.blur()" @blur="saveBarcode(p.row)"><template #append><q-icon name="qr_code_scanner" size="16px"/></template></q-input></q-td></template>
         <template #body-cell-stock_inicial="p">
           <q-td :props="p"><q-badge :color="p.value > 10 ? 'positive' : 'orange'" :label="p.value" /></q-td>
@@ -137,6 +139,14 @@
                      outlined dense label="Precio venta *" prefix="Bs" class="col-12 col-sm-4" :rules="[nonNegative]" />
             <q-input v-model.number="form.stock_inicial" type="number" min="0" :step="form.unidad==='KG'?0.001:1"
                      outlined dense :label="form.unidad==='KG'?'Stock inicial (kg) *':'Stock inicial *'" class="col-12 col-sm-4" :rules="[nonNegative]" />
+            <div class="col-12 row items-center q-gutter-x-sm">
+              <div class="text-caption text-weight-bold text-grey-8">Niveles de precio</div>
+              <div class="text-caption text-grey-6">el 5 es el precio de venta al público y el 1 el más barato</div>
+              <q-space/>
+              <q-btn dense flat no-caps size="sm" icon="calculate" color="primary" label="Calcular desde el precio de venta" @click="recalcularNiveles"/>
+            </div>
+            <q-input v-for="n in NIVELES" :key="n" v-model.number="form[`precio_${n}`]" type="number" step="0.01" min="0"
+                     outlined dense :label="`Precio ${n}`" prefix="Bs" class="col-12 col-sm-6 col-md-4" :rules="[nonNegative]" hide-bottom-space/>
             </div>
           </q-card-section>
           <q-card-actions align="right">
@@ -281,6 +291,10 @@ const stockOptions = [
   { label: 'Sin stock', value: 'sin' },
   { label: 'Stock bajo (≤ 10)', value: 'bajo' }
 ]
+/** El precio 5 es el precio de venta al público y los anteriores bajan un 5% por nivel. */
+const NIVELES = [1, 2, 3, 4, 5]
+const ESCALA_PRECIOS = { 1: 0.80, 2: 0.85, 3: 0.90, 4: 0.95, 5: 1 }
+const LEVEL_FIELDS = NIVELES.map(n => `precio_${n}`)
 const sortOptions = [
   { label: 'Producto (alfabético)', value: 'nombre' },
   { label: 'Código', value: 'codigo' },
@@ -288,10 +302,11 @@ const sortOptions = [
   { label: 'Unidad', value: 'unidad' },
   { label: 'Precio compra', value: 'precio_compra' },
   { label: 'Precio venta', value: 'precio_venta' },
+  ...NIVELES.map(n => ({ label: `Precio ${n}`, value: `precio_${n}` })),
   { label: 'Cantidad en stock', value: 'stock_inicial' },
   { label: 'Más recientes', value: 'created_at' }
 ]
-const empty = () => ({ id: null, codigo: '', codigo_barras: '', nombre: '', categoria_id: null, unidad: 'UNIDAD', precio_compra: 0, precio_venta: 0, stock_inicial: 0, foto: null, foto_url: '' })
+const empty = () => ({ id: null, codigo: '', codigo_barras: '', nombre: '', categoria_id: null, unidad: 'UNIDAD', precio_compra: 0, precio_venta: 0, ...Object.fromEntries(LEVEL_FIELDS.map(f => [f, 0])), stock_inicial: 0, foto: null, foto_url: '' })
 const form = reactive(empty())
 const categoryForm = reactive({ id:null, nombre:'', color:'primary' })
 const colorOptions=['primary','blue','light-blue','purple','amber','orange','red','pink','brown','blue-grey','green']
@@ -305,8 +320,11 @@ const columns = [
   { name:'unidad', label:'Unidad', field:'unidad', align:'center', sortable:true },
   { name:'precio_compra', label:'P. compra', field:'precio_compra', align:'right', sortable:true },
   { name:'precio_venta', label:'P. venta', field:'precio_venta', align:'right', sortable:true },
+  ...NIVELES.map(n=>({ name:`precio_${n}`, label:`Precio ${n}`, field:`precio_${n}`, align:'right', sortable:true })),
   { name:'stock_inicial', label:'Stock inicial', field:'stock_inicial', align:'center', sortable:true }
 ]
+const showLevels = ref(false)
+const visibleColumns = computed(() => columns.map(c => c.name).filter(c => showLevels.value || !LEVEL_FIELDS.includes(c)))
 const can = p => proxy.$store.hasPermission(p)
 const required = v => (v !== null && v !== '') || 'Campo requerido'
 const nonNegative = v => Number(v) >= 0 || 'Debe ser mayor o igual a cero'
@@ -392,6 +410,7 @@ function loadCatalogs () {
     unitOptions.value=[...new Set([...unitOptions.value, ...data.unidades])]
   })
 }
+function recalcularNiveles () { NIVELES.forEach(n => { form[`precio_${n}`] = Number((Number(form.precio_venta || 0) * ESCALA_PRECIOS[n]).toFixed(2)) }) }
 function openForm (row=null) { Object.assign(form, empty(), row || {}); photo.value=null; photoPreview.value=''; dialog.value=true }
 async function saveBarcode (row) {
   if (!can('Editar Productos')) return

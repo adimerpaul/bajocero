@@ -19,6 +19,7 @@ class VentasExport implements WithMultipleSheets
         return [
             new VentasHojaVentas($this->ventas, $this->meta),
             new VentasHojaProductos($this->ventas, $this->meta),
+            new VentasHojaPreciosModificados($this->ventas, $this->meta),
             new VentasHojaResumen($this->ventas, $this->productos, $this->meta),
         ];
     }

@@ -21,7 +21,14 @@ class ProductoController extends Controller
     private const SORTABLE = [
         'nombre', 'codigo', 'codigo_barras', 'categoria', 'unidad',
         'precio_compra', 'precio_venta', 'stock_inicial', 'created_at',
+        'precio_1', 'precio_2', 'precio_3', 'precio_4', 'precio_5',
     ];
+
+    /**
+     * Porcentaje del precio de venta que corresponde a cada nivel de precio.
+     * El 5 es el precio de venta al público y los anteriores bajan un 5% por nivel.
+     */
+    private const ESCALA_PRECIOS = [1 => 0.80, 2 => 0.85, 3 => 0.90, 4 => 0.95, 5 => 1.00];
 
     public function index(Request $request)
     {
@@ -449,6 +456,8 @@ class ProductoController extends Controller
             'codigo' => 'Código', 'codigo_barras' => 'Código de barras', 'nombre' => 'Producto',
             'categoria' => 'Categoría', 'categoria_id' => 'Categoría (id)', 'unidad' => 'Unidad',
             'precio_compra' => 'Precio compra', 'precio_venta' => 'Precio venta',
+            'precio_1' => 'Precio 1', 'precio_2' => 'Precio 2', 'precio_3' => 'Precio 3',
+            'precio_4' => 'Precio 4', 'precio_5' => 'Precio 5',
             'stock_inicial' => 'Cantidad en stock', 'foto' => 'Fotografía', 'deleted_at' => 'Eliminado',
         ];
         $eventos = ['created' => 'Creado', 'updated' => 'Modificado', 'deleted' => 'Eliminado', 'restored' => 'Restaurado'];
@@ -497,6 +506,11 @@ class ProductoController extends Controller
             'unidad' => ['required', 'string', 'max:20'],
             'precio_compra' => ['required', 'numeric', 'min:0'],
             'precio_venta' => ['required', 'numeric', 'min:0'],
+            'precio_1' => ['nullable', 'numeric', 'min:0'],
+            'precio_2' => ['nullable', 'numeric', 'min:0'],
+            'precio_3' => ['nullable', 'numeric', 'min:0'],
+            'precio_4' => ['nullable', 'numeric', 'min:0'],
+            'precio_5' => ['nullable', 'numeric', 'min:0'],
             'stock_inicial' => ['required', 'numeric', 'min:0', 'decimal:0,3'],
         ]);
         foreach (['codigo', 'nombre', 'categoria', 'unidad'] as $field) {
@@ -505,6 +519,12 @@ class ProductoController extends Controller
         }
         if (! empty($data['categoria_id'])) {
             $data['categoria'] = Categoria::find($data['categoria_id'])?->nombre;
+        }
+        foreach (self::ESCALA_PRECIOS as $nivel => $factor) {
+            $campo = "precio_{$nivel}";
+            $data[$campo] = isset($data[$campo]) && $data[$campo] !== ''
+                ? round((float) $data[$campo], 2)
+                : round((float) $data['precio_venta'] * $factor, 2);
         }
 
         return $data;

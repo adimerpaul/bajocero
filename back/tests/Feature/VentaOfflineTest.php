@@ -73,6 +73,41 @@ class VentaOfflineTest extends TestCase
         $this->assertEqualsWithDelta(now()->subHour()->timestamp, $venta->fecha->timestamp, 5);
     }
 
+    public function test_guarda_el_precio_base_y_detecta_un_precio_modificado(): void
+    {
+        $user = $this->cajero();
+        $producto = $this->producto();
+        $cuerpo = $this->cuerpo($producto, (string) Str::uuid());
+        $cuerpo['detalles'][0]['precio_venta'] = 8.50;
+
+        $respuesta = $this->actingAs($user)->postJson('/api/ventas', $cuerpo);
+
+        $respuesta->assertCreated()
+            ->assertJsonPath('detalles.0.precio_base', '10.0000')
+            ->assertJsonPath('detalles.0.precio_venta', '8.5000')
+            ->assertJsonPath('detalles.0.precio_cambiado', true);
+        $this->assertDatabaseHas('venta_detalles', [
+            'producto_id' => $producto->id,
+            'precio_base' => 10,
+            'precio_venta' => 8.5,
+            'precio_cambiado' => true,
+        ]);
+    }
+
+    public function test_exporta_los_precios_modificados_en_excel_y_pdf(): void
+    {
+        $user = $this->cajero('Crear Ventas', 'Ver Ventas');
+        $producto = $this->producto();
+        $cuerpo = $this->cuerpo($producto, (string) Str::uuid());
+        $cuerpo['detalles'][0]['precio_venta'] = 8.50;
+        $this->actingAs($user)->postJson('/api/ventas', $cuerpo)->assertCreated();
+
+        $this->actingAs($user)->get('/api/ventas-exportar/precios-modificados/excel')
+            ->assertOk()->assertHeader('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        $this->actingAs($user)->get('/api/ventas-exportar/precios-modificados/pdf')
+            ->assertOk()->assertHeader('content-type', 'application/pdf');
+    }
+
     public function test_la_verificacion_informa_los_uuid_ya_registrados(): void
     {
         $user = $this->cajero();

@@ -15,15 +15,15 @@ class VentaDetalle extends Model implements AuditableContract
 
     protected $fillable = [
         'venta_id', 'producto_id', 'codigo', 'codigo_barras', 'nombre',
-        'categoria', 'unidad', 'foto', 'precio_compra', 'precio_venta',
+        'categoria', 'unidad', 'foto', 'precio_compra', 'precio_venta', 'precio_base', 'precio_cambiado',
         'cantidad', 'descuenta_stock', 'subtotal', 'descuento', 'total',
     ];
 
     protected $casts = [
-        'precio_compra' => 'decimal:2', 'precio_venta' => 'decimal:4',
+        'precio_compra' => 'decimal:2', 'precio_venta' => 'decimal:4', 'precio_base' => 'decimal:4',
         'cantidad' => 'decimal:3', 'subtotal' => 'decimal:2',
         'descuento' => 'decimal:2', 'total' => 'decimal:2',
-        'descuenta_stock' => 'boolean',
+        'descuenta_stock' => 'boolean', 'precio_cambiado' => 'boolean',
     ];
 
     public function venta()

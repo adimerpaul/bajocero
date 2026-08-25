@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exports\VentasExport;
+use App\Exports\VentasHojaPreciosModificados;
 use App\Models\Configuracion;
 use App\Models\Lote;
 use App\Models\Producto;
@@ -150,6 +151,41 @@ class VentaController extends Controller
             ->download('ventas_'.now()->format('Ymd_His').'.pdf');
     }
 
+    public function exportChangedPricesExcel(Request $request)
+    {
+        $this->authorizeAction($request, 'Ver Ventas');
+        $ventas = $this->changedPriceSales($request);
+
+        return Excel::download(
+            new VentasHojaPreciosModificados($ventas, $this->reportMeta($request)),
+            'precios_modificados_'.now()->format('Ymd_His').'.xlsx'
+        );
+    }
+
+    public function exportChangedPricesPdf(Request $request)
+    {
+        $this->authorizeAction($request, 'Ver Ventas');
+        $ventas = $this->changedPriceSales($request);
+        $detalles = $ventas->flatMap(fn ($venta) => $venta->detalles->map(fn ($detalle) => [
+            'venta' => $venta,
+            'detalle' => $detalle,
+            'diferencia' => (float) $detalle->precio_venta - (float) $detalle->precio_base,
+        ]));
+
+        return Pdf::loadView('ventas.precios_modificados', [
+            'detalles' => $detalles,
+            'meta' => $this->reportMeta($request),
+        ])->setPaper('letter', 'landscape')->download('precios_modificados_'.now()->format('Ymd_His').'.pdf');
+    }
+
+    private function changedPriceSales(Request $request)
+    {
+        return $this->filteredQuery($request)
+            ->whereHas('detalles', fn ($query) => $query->where('precio_cambiado', true))
+            ->with(['detalles' => fn ($query) => $query->where('precio_cambiado', true)])
+            ->latest('fecha')->get();
+    }
+
     public function show(Request $request, Venta $venta)
     {
         $this->authorizeAction($request, 'Ver Ventas');
@@ -246,9 +282,11 @@ class VentaController extends Controller
                 $deductStock = (float) $product->stock_inicial > 0;
                 abort_if($deductStock && (float) $product->stock_inicial + 0.0001 < $quantity, 422, "Stock insuficiente para {$product->nombre}");
                 $salePrice = round((float) $detail['precio_venta'], 4);
+                $basePrice = round((float) $product->precio_venta, 4);
+                $priceChanged = abs($salePrice - $basePrice) > 0.00005;
                 $lineSubtotal = round($salePrice * $quantity, 2);
                 $subtotal += $lineSubtotal;
-                $items[] = [$product, $quantity, $salePrice, $lineSubtotal, $deductStock];
+                $items[] = [$product, $quantity, $salePrice, $basePrice, $priceChanged, $lineSubtotal, $deductStock];
             }
 
             $discount = round((float) ($data['descuento'] ?? 0), 2);
@@ -277,7 +315,7 @@ class VentaController extends Controller
             $sale->update(['numero' => 'V-'.str_pad((string) $sale->id, 8, '0', STR_PAD_LEFT)]);
 
             $allocated = 0;
-            foreach ($items as $index => [$product, $quantity, $salePrice, $lineSubtotal, $deductStock]) {
+            foreach ($items as $index => [$product, $quantity, $salePrice, $basePrice, $priceChanged, $lineSubtotal, $deductStock]) {
                 $lineDiscount = $index === array_key_last($items)
                     ? $discount - $allocated
                     : round($discount * ($lineSubtotal / $subtotal), 2);
@@ -292,6 +330,8 @@ class VentaController extends Controller
                     'foto' => $product->foto,
                     'precio_compra' => $product->precio_compra,
                     'precio_venta' => $salePrice,
+                    'precio_base' => $basePrice,
+                    'precio_cambiado' => $priceChanged,
                     'cantidad' => $quantity,
                     'descuenta_stock' => $deductStock,
                     'subtotal' => $lineSubtotal,
