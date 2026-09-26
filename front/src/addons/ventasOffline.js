@@ -149,7 +149,7 @@ export function stockComprometido () {
  *
  * @param items  [{ id, codigo, nombre, unidad, foto, cantidad, precio_venta }]
  */
-export function armarVentaOffline ({ items, descuento = 0, tipoPago = 'EFECTIVO', efectivo = 0, qr = 0, observacion = null, usuario = '', uuid = null }) {
+export function armarVentaOffline ({ items, descuento = 0, tipoPago = 'EFECTIVO', efectivo = 0, qr = 0, observacion = null, usuario = '', uuid = null, comprobante = 'FACTURA', cliente = null }) {
   const dos = value => Number(Number(value || 0).toFixed(2))
   const base = items.reduce((sum, i) => sum + Number(i.precio_venta) * Number(i.cantidad), 0)
   const total = dos(Math.max(0, base - descuento))
@@ -188,6 +188,9 @@ export function armarVentaOffline ({ items, descuento = 0, tipoPago = 'EFECTIVO'
     monto_efectivo: dos(efectivo),
     monto_qr: dos(qr),
     observacion: observacion || null,
+    // Al exportarse se factura con la hora del cobro (tipo de emisión fuera de línea).
+    tipo_comprobante: comprobante,
+    cliente: comprobante === 'FACTURA' && cliente ? { ...cliente } : null,
     estado: PENDIENTE,
     exportado: false,
     exportado_en: null,
@@ -207,6 +210,9 @@ export function cuerpoParaEnviar (venta) {
     monto_efectivo: venta.monto_efectivo,
     monto_qr: venta.monto_qr,
     observacion: venta.observacion,
+    // Ventas guardadas antes de la facturación no traen el campo: se facturan igual.
+    tipo_comprobante: venta.tipo_comprobante || 'FACTURA',
+    ...(venta.cliente || {}),
     detalles: (venta.detalles || []).map(i => ({
       producto_id: i.producto_id,
       cantidad: i.cantidad,

@@ -72,6 +72,7 @@
             <q-card-section v-else class="text-center text-grey-6 q-py-xl"><q-icon name="remove_shopping_cart" size="42px"/><div>Agrega productos</div></q-card-section>
             <q-separator/>
             <q-card-section class="q-pa-sm">
+              <ClienteFactura v-model:cliente="cliente" offline/>
               <q-input v-model.number="discount" dense outlined type="number" min="0" :max="subtotal" step="0.01" label="Descuento" prefix="Bs" class="q-mb-sm"/>
               <q-select v-model="paymentType" dense outlined :options="paymentTypes" label="Tipo de pago" class="q-mb-sm"/>
               <div v-if="paymentType==='COMBINADO'" class="row q-col-gutter-sm q-mb-sm">
@@ -96,9 +97,13 @@
 <script setup>
 import { computed, getCurrentInstance, onMounted, ref, watch } from 'vue'
 import { printSale } from '../../addons/ventaPrint'
+import ClienteFactura from '../../components/ClienteFactura.vue'
+import { clienteVacio } from '../../stores/carritos-store'
 import { armarVentaOffline, catalogoOffline, guardarCatalogo, guardarVentaOffline, stockComprometido, ventasPorEnviar } from '../../addons/ventasOffline'
 const {proxy}=getCurrentInstance()
 const catalogo=ref(catalogoOffline()),descargando=ref(false),pendientes=ref(ventasPorEnviar().length)
+// Con carnet o NIT se factura al exportarla; sin documento se registra sin factura.
+const cliente=ref(clienteVacio()),comprobante=computed(()=>['','0'].includes(String(cliente.value.numero_documento||'').trim())?'RECIBO':'FACTURA')
 const cart=ref([]),search=ref(''),category=ref(null),discount=ref(0),observation=ref(''),searchInput=ref(null)
 const PER_PAGE=15,page=ref(1)
 const paymentType=ref('EFECTIVO'),paymentTypes=['EFECTIVO','QR','COMBINADO'],cashAmount=ref(0),qrAmount=ref(0)
@@ -144,12 +149,12 @@ function removeItem(item){cart.value=cart.value.filter(i=>i.id!==item.id)}
 function clearCart(){if(!cart.value.length)return;proxy.$alert.confirm('¿Vaciar todo el carrito?').onOk(()=>{cart.value=[];discount.value=0;observation.value='';proxy.$alert.info('Carrito vacío');searchInput.value?.focus()})}
 
 /* --------------------------- guardar venta offline -------------------------- */
-function confirmSale(){cart.value.forEach(item=>{const requestedTotal=item.total_editable;validateQty(item);item.total_editable=requestedTotal;applyLineTotal(item)});if(cart.value.some(i=>Number(i.precio_venta)<0||i.precio_venta===''))return proxy.$alert.error('Revisa los precios de venta');if(paymentType.value==='COMBINADO'&&paymentDifference.value!==0)return proxy.$alert.error('Efectivo y QR deben sumar el total');proxy.$alert.dialog(`¿Guardar la venta offline por Bs ${money(total.value)}?`).onOk(()=>{const venta=armarVentaOffline({items:cart.value,descuento:validDiscount.value,tipoPago:paymentType.value,efectivo:cashAmount.value,qr:qrAmount.value,observacion:observation.value,usuario:proxy.$store.user.name||proxy.$store.user.username||''})
+function confirmSale(){cart.value.forEach(item=>{const requestedTotal=item.total_editable;validateQty(item);item.total_editable=requestedTotal;applyLineTotal(item)});if(cart.value.some(i=>Number(i.precio_venta)<0||i.precio_venta===''))return proxy.$alert.error('Revisa los precios de venta');if(paymentType.value==='COMBINADO'&&paymentDifference.value!==0)return proxy.$alert.error('Efectivo y QR deben sumar el total');if(comprobante.value==='FACTURA'&&String(cliente.value.numero_documento||'').trim()&&!String(cliente.value.cliente_nombre||'').trim())return proxy.$alert.error('Ingresa el nombre o razón social del cliente');proxy.$alert.dialog(`¿Guardar la venta offline por Bs ${money(total.value)}?`).onOk(()=>{const venta=armarVentaOffline({comprobante:comprobante.value,cliente:cliente.value,items:cart.value,descuento:validDiscount.value,tipoPago:paymentType.value,efectivo:cashAmount.value,qr:qrAmount.value,observacion:observation.value,usuario:proxy.$store.user.name||proxy.$store.user.username||''})
   try{guardarVentaOffline(venta)}catch(e){return proxy.$alert.error(e.message)}
   reservado.value=stockComprometido();pendientes.value=ventasPorEnviar().length
   proxy.$alert.success(`Venta ${venta.numero_local} guardada en este dispositivo`,'Expórtala a ventas desde "Ventas offline" cuando tengas internet')
   printSale({...venta,numero:venta.numero_local,estado:'PENDIENTE',pendiente:true})
-  cart.value=[];discount.value=0;observation.value='';paymentType.value='EFECTIVO';searchInput.value?.focus()})}
+  cart.value=[];discount.value=0;observation.value='';paymentType.value='EFECTIVO';cliente.value=clienteVacio();searchInput.value?.focus()})}
 
 onMounted(()=>{
   // Con internet se refresca el catálogo solo si nunca se bajó o si ya pasaron 12 h.

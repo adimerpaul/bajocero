@@ -11,7 +11,7 @@ class Categoria extends Model implements AuditableContract
 {
     use Auditable, SoftDeletes;
 
-    protected $fillable = ['nombre', 'color'];
+    protected $fillable = ['nombre', 'color', 'actividad_economica', 'codigo_producto_sin'];
 
     public function productos()
     {

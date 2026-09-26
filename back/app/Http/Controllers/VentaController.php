@@ -4,16 +4,20 @@ namespace App\Http\Controllers;
 
 use App\Exports\VentasExport;
 use App\Exports\VentasHojaPreciosModificados;
+use App\Models\Cliente;
 use App\Models\Configuracion;
 use App\Models\Lote;
 use App\Models\Producto;
 use App\Models\User;
 use App\Models\Venta;
+use App\Services\Siat\FacturaCorreoService;
+use App\Services\Siat\FacturaService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Maatwebsite\Excel\Facades\Excel;
 
 class VentaController extends Controller
@@ -42,6 +46,9 @@ class VentaController extends Controller
             'total' => (clone $query)->sum('total'),
             'descuento' => (clone $query)->sum('descuento'),
             'cantidad' => (clone $query)->count(),
+            'facturas' => (clone $query)->where('tipo_comprobante', 'FACTURA')->count(),
+            'facturas_pendientes' => (clone $query)->where('tipo_comprobante', 'FACTURA')
+                ->whereIn('estado_siat', ['PENDIENTE', 'PENDIENTE_EVENTO', 'OBSERVADA'])->count(),
             'usuarios' => User::orderBy('name')->get(['id', 'name']),
         ]);
     }
@@ -193,6 +200,76 @@ class VentaController extends Controller
         return response()->json($venta->load('detalles'));
     }
 
+    public function motivosAnulacion(Request $request)
+    {
+        $this->authorizeAction($request, 'Ver Ventas');
+
+        return response()->json(collect(FacturaService::motivosAnulacion())->map(fn ($descripcion, $codigo) => compact('codigo', 'descripcion'))->values());
+    }
+
+    /** PDF de la factura generado en el momento; no se guarda en el servidor. */
+    public function facturaPdf(Request $request, Venta $venta, FacturaCorreoService $correo)
+    {
+        $this->authorizeAction($request, 'Ver Ventas');
+        abort_unless($venta->tipo_comprobante === 'FACTURA' && $venta->cuf, 422, 'La venta no tiene factura emitida');
+
+        return response($correo->pdf($venta), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => "inline; filename=\"Factura_{$venta->numero_factura}.pdf\"",
+        ]);
+    }
+
+    /** Reenvía (o envía a otro correo) el PDF y el XML de la factura. */
+    public function enviarFactura(Request $request, Venta $venta, FacturaCorreoService $correo)
+    {
+        $this->authorizeAction($request, 'Ver Ventas');
+        abort_unless($venta->tipo_comprobante === 'FACTURA' && $venta->cuf, 422, 'La venta no tiene factura emitida');
+        $data = $request->validate(['email' => ['nullable', 'email', 'max:255']]);
+        $email = $data['email'] ?? null;
+        if ($email && ! $venta->cliente_email) {
+            $venta->update(['cliente_email' => $email]);
+            $venta->cliente?->update(['email' => $email]);
+        }
+        abort_unless($email || $venta->cliente_email, 422, 'El cliente no tiene correo: ingrese uno');
+        abort_unless($correo->enviar($venta, $email), 422, 'No se pudo enviar el correo: '.($venta->fresh()->email_error ?: 'sin detalle'));
+
+        return response()->json(['mensaje' => 'Factura enviada a '.($email ?: $venta->cliente_email), 'venta' => $venta->fresh()]);
+    }
+
+    /** Consulta a Impuestos el estado real de la factura. */
+    public function verificarFactura(Request $request, Venta $venta, FacturaService $facturas)
+    {
+        $this->authorizeAction($request, 'Ver Ventas');
+        try {
+            return response()->json($facturas->verificar($venta) + ['venta' => $venta->fresh()->load('detalles')]);
+        } catch (\RuntimeException $exception) {
+            abort(422, $exception->getMessage());
+        }
+    }
+
+    /**
+     * Vuelve a emitir una factura que no llegó a Impuestos (PENDIENTE) o que el SIN
+     * rechazó (OBSERVADA), opcionalmente con los datos del cliente corregidos. Como el
+     * SIN nunca la aceptó, se conserva el número de factura y se genera un CUF nuevo.
+     */
+    public function reemitirFactura(Request $request, Venta $venta, FacturaService $facturas)
+    {
+        $this->authorizeAction($request, 'Crear Ventas');
+        abort_unless($venta->tipo_comprobante === 'FACTURA', 422, 'La venta no es una factura');
+        abort_unless($venta->estado === 'COMPLETADA', 422, 'La venta está anulada');
+        abort_unless(in_array($venta->estado_siat, FacturaService::REEMITIBLES, true), 422, 'Sólo se reemiten facturas pendientes u observadas por Impuestos');
+        $data = $request->validate($this->clientRules());
+        if ($request->has('numero_documento')) {
+            $venta->update($this->clientFields($data));
+        }
+        $venta->update(['cuf' => null, 'cufd' => null, 'codigo_recepcion' => null, 'siat_mensaje' => null, 'leyenda' => null]);
+
+        $venta = $facturas->emitir($venta->fresh());
+        app(FacturaCorreoService::class)->enviarDespues($venta);
+
+        return response()->json($venta->load('detalles'));
+    }
+
     /**
      * Ventas hechas sin conexión: dice cuáles de esos uuid ya están registrados.
      * El celular lo consulta antes de enviar la cola para no repetir una venta que
@@ -230,7 +307,9 @@ class VentaController extends Controller
             'detalles.*.producto_id' => ['required', 'integer', 'exists:productos,id'],
             'detalles.*.cantidad' => ['required', 'numeric', 'min:0.001', 'decimal:0,3'],
             'detalles.*.precio_venta' => ['required', 'numeric', 'min:0'],
-        ]);
+            // Sin indicarlo la venta se factura: todo Bajo Cero emite factura.
+            'tipo_comprobante' => ['nullable', 'in:FACTURA,RECIBO'],
+        ] + $this->clientRules());
 
         // Reenvío de una venta offline que ya llegó: se devuelve la registrada, no se duplica.
         if ($registrada = $this->ventaOfflineRegistrada($data['uuid'] ?? null)) {
@@ -247,6 +326,12 @@ class VentaController extends Controller
             }
 
             return response()->json($registrada->load('detalles')->toArray() + ['duplicada' => true]);
+        }
+
+        // Fuera de la transacción: la venta ya quedó registrada aunque Impuestos falle.
+        if ($venta->tipo_comprobante === 'FACTURA') {
+            $venta = app(FacturaService::class)->emitir($venta);
+            app(FacturaCorreoService::class)->enviarDespues($venta);
         }
 
         return response()->json($venta->load('detalles'), 201);
@@ -297,7 +382,17 @@ class VentaController extends Controller
             abort_if(abs(($cash + $qr) - $total) > 0.009, 422, 'Los montos de efectivo y QR deben sumar el total de la venta');
 
             $offlineDate = $this->fechaOffline($data['fecha_offline'] ?? null);
-            $sale = Venta::create([
+            $invoice = ($data['tipo_comprobante'] ?? 'FACTURA') === 'FACTURA';
+            $invoiceNumber = null;
+            if ($invoice) {
+                // Correlativo propio de las facturas; el candado evita que dos cajas tomen el mismo número.
+                Configuracion::lockForUpdate()->first();
+                $invoiceNumber = (int) DB::table('ventas')->max('numero_factura') + 1;
+            }
+            $sale = Venta::create($this->clientFields($data) + [
+                'tipo_comprobante' => $invoice ? 'FACTURA' : 'RECIBO',
+                'numero_factura' => $invoiceNumber,
+                'estado_siat' => $invoice ? 'PENDIENTE' : null,
                 'uuid' => $data['uuid'] ?? null,
                 'user_id' => $request->user()->id,
                 'usuario_nombre' => $request->user()->name,
@@ -371,7 +466,16 @@ class VentaController extends Controller
         if ($search = trim((string) $request->input('q'))) {
             $query->where(fn ($q) => $q->where('numero', 'like', "%{$search}%")
                 ->orWhere('usuario_nombre', 'like', "%{$search}%")
-                ->orWhere('estado', 'like', "%{$search}%"));
+                ->orWhere('estado', 'like', "%{$search}%")
+                ->orWhere('cliente_nombre', 'like', "%{$search}%")
+                ->orWhere('numero_documento', 'like', "{$search}%")
+                ->orWhere('numero_factura', $search));
+        }
+        if ($type = $request->input('tipo_comprobante')) {
+            $query->where('tipo_comprobante', $type);
+        }
+        if ($siatState = $request->input('estado_siat')) {
+            $query->where('estado_siat', $siatState);
         }
         if ($from = $request->date('desde')) {
             $query->whereDate('fecha', '>=', $from);
@@ -408,10 +512,24 @@ class VentaController extends Controller
             : $parts[1].':'.$parts[2].':'.substr($fallbackSeconds, -2);
     }
 
-    public function cancel(Request $request, Venta $venta)
+    public function cancel(Request $request, Venta $venta, FacturaService $facturas)
     {
         $this->authorizeAction($request, 'Anular Ventas');
         abort_if($venta->estado === 'ANULADA', 422, 'La venta ya está anulada');
+        abort_if($venta->estado_siat === 'PENDIENTE_EVENTO', 422, 'La factura todavía no llegó a Impuestos: envíe primero el evento significativo desde Impuestos y luego anúlela');
+        // Una factura aceptada por el SIN se anula primero allí; si Impuestos lo rechaza la venta queda intacta.
+        if ($venta->tipo_comprobante === 'FACTURA' && $venta->estado_siat === 'VALIDADA') {
+            $data = $request->validate(['codigo_motivo' => ['required', 'integer', Rule::in(array_keys(FacturaService::motivosAnulacion()))]]);
+            try {
+                $result = $facturas->anular($venta, (int) $data['codigo_motivo']);
+            } catch (\RuntimeException $exception) {
+                abort(422, $exception->getMessage());
+            }
+            abort_unless($result['anulada'], 422, $result['mensaje']);
+            $motivo = FacturaService::motivosAnulacion()[(int) $data['codigo_motivo']] ?? null;
+            $id = $venta->id;
+            dispatch(fn () => app(FacturaCorreoService::class)->enviarAnulacion(Venta::find($id), $motivo))->afterResponse();
+        }
 
         DB::transaction(function () use ($venta) {
             foreach ($venta->detalles as $detail) {
@@ -428,6 +546,47 @@ class VentaController extends Controller
         });
 
         return response()->json($venta->fresh());
+    }
+
+    private function clientRules(): array
+    {
+        return [
+            'tipo_documento' => ['nullable', Rule::in(array_keys(Cliente::TIPOS_DOCUMENTO))],
+            'numero_documento' => ['nullable', 'string', 'max:20'],
+            'complemento' => ['nullable', 'string', 'max:5'],
+            'cliente_nombre' => ['nullable', 'string', 'max:500'],
+            'cliente_email' => ['nullable', 'email', 'max:255'],
+            'codigo_excepcion' => ['nullable', 'boolean'],
+        ];
+    }
+
+    /**
+     * Datos del comprador para la factura. Con documento se guarda o actualiza el
+     * cliente en el padrón; sin documento sale al código especial del SIN 99002, que
+     * exige la razón social CONTROL TRIBUTARIO (con documento 0 el SIN la rechaza).
+     */
+    private function clientFields(array $data): array
+    {
+        $document = trim((string) ($data['numero_documento'] ?? ''));
+        if (in_array($document, ['', '0', Cliente::DOCUMENTO_SIN_DATOS], true)) {
+            return ['cliente_id' => null, 'tipo_documento' => 'CI', 'numero_documento' => Cliente::DOCUMENTO_SIN_DATOS, 'complemento' => null,
+                'cliente_nombre' => Cliente::NOMBRE_SIN_DATOS, 'cliente_email' => null, 'codigo_excepcion' => null];
+        }
+        $type = $data['tipo_documento'] ?? 'CI';
+        $complement = mb_strtoupper(trim((string) ($data['complemento'] ?? '')));
+        $name = mb_strtoupper(trim((string) ($data['cliente_nombre'] ?? ''))) ?: 'S/N';
+        $client = Cliente::withTrashed()->firstOrNew(['tipo_documento' => $type, 'numero_documento' => $document, 'complemento' => $complement]);
+        $client->fill(['nombre' => $name] + (empty($data['cliente_email']) ? [] : ['email' => $data['cliente_email']]));
+        $client->deleted_at = null;
+        $client->save();
+
+        return [
+            'cliente_id' => $client->id, 'tipo_documento' => $type, 'numero_documento' => $document,
+            'complemento' => $complement ?: null, 'cliente_nombre' => $name,
+            'cliente_email' => $data['cliente_email'] ?? $client->email,
+            // Sólo para NIT: el cliente insiste en un NIT que el padrón del SIN no reconoce.
+            'codigo_excepcion' => $type === 'NIT' && ! empty($data['codigo_excepcion']) ? 1 : null,
+        ];
     }
 
     /** @param  string|string[]  $permission  Con varios, alcanza con tener uno. */

@@ -18,8 +18,13 @@ const KEY = 'carritosBajoCero'
 export const MAX_CARRITOS = 5
 
 const MODULOS = {
-  ventas: { etiqueta: 'Carrito', nuevo: () => ({ items: [], descuento: 0, observacion: '', tipoPago: 'EFECTIVO', efectivo: 0, qr: 0 }) },
+  // `cliente` son los datos de la factura: sin número de documento sale a CONTROL TRIBUTARIO.
+  ventas: { etiqueta: 'Carrito', nuevo: () => ({ items: [], descuento: 0, observacion: '', tipoPago: 'EFECTIVO', efectivo: 0, qr: 0, comprobante: 'FACTURA', cliente: clienteVacio() }) },
   compras: { etiqueta: 'Compra', nuevo: () => ({ items: [], proveedor: null, factura: '', comentario: '', tipoPago: 'EFECTIVO', efectivo: 0, qr: 0 }) },
+}
+
+export function clienteVacio () {
+  return { tipo_documento: 'CI', numero_documento: '', complemento: '', cliente_nombre: '', cliente_email: '', codigo_excepcion: false }
 }
 
 function crearCarrito (modulo, numero) {

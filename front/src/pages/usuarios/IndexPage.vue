@@ -90,7 +90,7 @@ const can=p=>proxy.$store.hasPermission(p),required=v=>!!v||'Campo requerido'
 const avatarUrl=filename=>`${proxy.$imgBase}/images/${filename}`
 const filtered=computed(()=>{const q=(search.value||'').toLowerCase();return rows.value.filter(u=>[u.name,u.username,u.email,u.ci].some(v=>(v||'').toLowerCase().includes(q)))})
 // El grupo del inventario se muestra como "Inventario" aunque sus permisos se llamen "Almacenes".
-const permissionGroups=computed(()=>[['Usuarios'],['Productos'],['Ventas'],['Compras'],['Bajas'],['Inventario','Almacenes'],['Configuración']].map(([name,match=name])=>({name,match,items:permissions.value.filter(p=>p.name.includes(match))})))
+const permissionGroups=computed(()=>[['Usuarios'],['Productos'],['Ventas'],['Clientes'],['Compras'],['Bajas'],['Inventario','Almacenes'],['Configuración'],['Impuestos']].map(([name,match=name])=>({name,match,items:permissions.value.filter(p=>p.name.includes(match))})))
 function load(){loading.value=true;proxy.$axios.get('/users').then(r=>rows.value=r.data).catch(e=>proxy.$alert.error(e.response?.data?.message||'No se pudieron cargar los usuarios')).finally(()=>loading.value=false)}
 async function openForm(row=null){clearPreview();avatarFile.value=null;dragging.value=false;Object.assign(form,empty(),row||{});selectedPermissions.value=(row?.permissions||[]).map(p=>p.id);if(can('Gestionar Permisos')){try{permissions.value=(await proxy.$axios.get('/permissions')).data}catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudieron cargar los permisos')}}dialog.value=true}
 function closeForm(){dialog.value=false;clearPreview();avatarFile.value=null}

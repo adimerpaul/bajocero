@@ -2,10 +2,12 @@
 
 use App\Http\Controllers\AlmacenController;
 use App\Http\Controllers\BajaController;
+use App\Http\Controllers\ClienteController;
 use App\Http\Controllers\CompraController;
 use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\ImagenController;
 use App\Http\Controllers\ProductoController;
+use App\Http\Controllers\SiatController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\VentaController;
 use Illuminate\Support\Facades\Route;
@@ -58,8 +60,20 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/ventas-exportar/pdf', [VentaController::class, 'exportPdf']);
     Route::get('/ventas-exportar/precios-modificados/excel', [VentaController::class, 'exportChangedPricesExcel']);
     Route::get('/ventas-exportar/precios-modificados/pdf', [VentaController::class, 'exportChangedPricesPdf']);
+    Route::get('/ventas-motivos-anulacion', [VentaController::class, 'motivosAnulacion']);
     Route::get('/ventas/{venta}', [VentaController::class, 'show']);
     Route::put('/ventas/{venta}/anular', [VentaController::class, 'cancel']);
+    Route::get('/ventas/{venta}/verificar-factura', [VentaController::class, 'verificarFactura']);
+    Route::put('/ventas/{venta}/reemitir-factura', [VentaController::class, 'reemitirFactura']);
+    Route::get('/ventas/{venta}/factura-pdf', [VentaController::class, 'facturaPdf']);
+    Route::post('/ventas/{venta}/enviar-factura', [VentaController::class, 'enviarFactura']);
+
+    Route::get('/clientes', [ClienteController::class, 'index']);
+    Route::get('/clientes-buscar', [ClienteController::class, 'buscar']);
+    Route::get('/clientes-verificar-nit', [ClienteController::class, 'verificarNit']);
+    Route::post('/clientes', [ClienteController::class, 'store']);
+    Route::put('/clientes/{cliente}', [ClienteController::class, 'update']);
+    Route::delete('/clientes/{cliente}', [ClienteController::class, 'destroy']);
 
     Route::get('/compras', [CompraController::class, 'index']);
     Route::get('/compras-resumen', [CompraController::class, 'summary']);
@@ -93,4 +107,20 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::put('/configuracion', [ConfiguracionController::class, 'update']);
     Route::post('/configuracion/logo', [ConfiguracionController::class, 'uploadLogo']);
+
+    Route::get('/siat/estado', [SiatController::class, 'estado']);
+    Route::get('/siat/tokens', [SiatController::class, 'tokens']);
+    Route::post('/siat/tokens', [SiatController::class, 'storeToken']);
+    Route::delete('/siat/tokens/{token}', [SiatController::class, 'destroyToken']);
+    Route::get('/siat/cuis', [SiatController::class, 'cuis']);
+    Route::post('/siat/cuis', [SiatController::class, 'generarCuis']);
+    Route::get('/siat/cufds', [SiatController::class, 'cufds']);
+    Route::post('/siat/cufds', [SiatController::class, 'generarCufd']);
+    Route::post('/siat/sincronizar', [SiatController::class, 'sincronizar']);
+    Route::get('/siat/catalogos/{tipo}', [SiatController::class, 'catalogo']);
+    Route::get('/siat/categorias', [SiatController::class, 'categorias']);
+    Route::put('/siat/categorias/{categoria}', [SiatController::class, 'updateCategoria']);
+    Route::get('/siat/eventos', [SiatController::class, 'eventos']);
+    Route::post('/siat/eventos', [SiatController::class, 'enviarEventos']);
+    Route::post('/siat/eventos/{evento}/revalidar', [SiatController::class, 'revalidarEvento']);
 });

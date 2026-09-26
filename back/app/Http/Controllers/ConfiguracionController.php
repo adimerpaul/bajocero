@@ -9,7 +9,11 @@ class ConfiguracionController extends Controller
 {
     public function show()
     {
-        return response()->json(Configuracion::firstOrCreate([], ['nombre_empresa' => 'Bajo Cero']));
+        // Datos del emisor que van impresos en la factura (se guardan en el navegador para imprimir sin conexión).
+        return response()->json(Configuracion::firstOrCreate([], ['nombre_empresa' => 'Bajo Cero'])->toArray() + ['siat' => [
+            'nit' => config('siat.nit'), 'municipio' => config('siat.municipio'),
+            'sucursal' => config('siat.sucursal'), 'punto_venta' => config('siat.punto_venta'),
+        ]]);
     }
 
     public function update(Request $request)

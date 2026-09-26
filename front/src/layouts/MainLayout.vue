@@ -150,6 +150,7 @@ const links = [
   { title: 'Ventas', icon: 'receipt_long', link: '/ventas', can: 'Ver Ventas' },
   { title: 'Nueva venta offline', icon: 'wifi_off', link: '/ventas/offline/nueva', can: 'Crear Ventas Offline' },
   { title: 'Ventas offline', icon: 'cloud_queue', link: '/ventas/offline', can: 'Crear Ventas Offline' },
+  { title: 'Clientes', icon: 'contacts', link: '/clientes', can: 'Ver Clientes' },
   { title: 'Nueva compra', icon: 'add_business', link: '/compras/nueva', can: 'Crear Compras' },
   { title: 'Compras', icon: 'shopping_bag', link: '/compras', can: 'Ver Compras' },
   { title: 'Proveedores', icon: 'groups', link: '/proveedores', can: 'Ver Compras' },
@@ -158,6 +159,7 @@ const links = [
   { title: 'Bajas', icon: 'delete_forever', link: '/bajas', can: 'Ver Bajas' },
   { title: 'Por vencer', icon: 'schedule', link: '/productos/por-vencer', can: 'Ver Compras' },
   { title: 'Vencidos', icon: 'event_busy', link: '/productos/vencidos', can: 'Ver Compras' },
+  { title: 'Impuestos', icon: 'account_balance', link: '/impuestos', can: 'Gestionar Impuestos' },
   { title: 'Configuración', icon: 'settings', link: '/configuracion', can: 'Gestionar Configuración' },
 ]
 
