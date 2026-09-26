@@ -10,6 +10,7 @@ use App\Models\Lote;
 use App\Models\Producto;
 use App\Models\User;
 use App\Models\Venta;
+use App\Services\Siat\EventoSignificativoService;
 use App\Services\Siat\FacturaCorreoService;
 use App\Services\Siat\FacturaService;
 use Barryvdh\DomPDF\Facade\Pdf;
@@ -19,6 +20,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Maatwebsite\Excel\Facades\Excel;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class VentaController extends Controller
 {
@@ -47,6 +49,7 @@ class VentaController extends Controller
             'descuento' => (clone $query)->sum('descuento'),
             'cantidad' => (clone $query)->count(),
             'facturas' => (clone $query)->where('tipo_comprobante', 'FACTURA')->count(),
+            'por_enviar' => $this->porEnviar(Venta::query())->count(),
             'facturas_pendientes' => (clone $query)->where('tipo_comprobante', 'FACTURA')
                 ->whereIn('estado_siat', ['PENDIENTE', 'PENDIENTE_EVENTO', 'OBSERVADA'])->count(),
             'usuarios' => User::orderBy('name')->get(['id', 'name']),
@@ -234,6 +237,55 @@ class VentaController extends Controller
         abort_unless($correo->enviar($venta, $email), 422, 'No se pudo enviar el correo: '.($venta->fresh()->email_error ?: 'sin detalle'));
 
         return response()->json(['mensaje' => 'Factura enviada a '.($email ?: $venta->cliente_email), 'venta' => $venta->fresh()]);
+    }
+
+    public function motivosEvento(Request $request)
+    {
+        $this->authorizeAction($request, 'Ver Ventas');
+
+        return response()->json(collect(EventoSignificativoService::MOTIVOS)->map(fn ($descripcion, $codigo) => compact('codigo', 'descripcion'))->values());
+    }
+
+    /**
+     * Envía de una vez todo lo que falta: primero reintenta las facturas que nunca se
+     * generaron (PENDIENTE) y después manda en evento significativo las emitidas fuera
+     * de línea (PENDIENTE_EVENTO), incluidas las que el reintento dejara fuera de línea.
+     */
+    public function enviarPendientes(Request $request, FacturaService $facturas, EventoSignificativoService $eventos)
+    {
+        $this->authorizeAction($request, ['Crear Ventas', 'Gestionar Impuestos']);
+        $data = $request->validate([
+            'codigo_motivo' => ['required', 'integer', Rule::in(array_keys(EventoSignificativoService::MOTIVOS))],
+            'descripcion' => ['nullable', 'string', 'max:500'],
+        ]);
+        set_time_limit(600);
+
+        $reemitidas = 0;
+        foreach ($this->porEnviar(Venta::query())->where('estado_siat', 'PENDIENTE')->orderBy('id')->get() as $venta) {
+            $venta->update(['cuf' => null, 'cufd' => null, 'codigo_recepcion' => null, 'siat_mensaje' => null, 'leyenda' => null]);
+            $venta = $facturas->emitir($venta->fresh());
+            app(FacturaCorreoService::class)->enviarDespues($venta);
+            $reemitidas++;
+        }
+
+        $resultado = [];
+        if ($eventos->pendientes()->exists()) {
+            try {
+                $resultado = $eventos->enviarPendientes((int) $data['codigo_motivo'], $data['descripcion'] ?? null, $request->user()->id);
+            } catch (HttpException $exception) {
+                throw $exception;
+            } catch (\Throwable $exception) {
+                report($exception);
+                abort(422, 'Impuestos no respondió: '.$exception->getMessage());
+            }
+        }
+
+        return response()->json([
+            'reemitidas' => $reemitidas,
+            'eventos' => $resultado,
+            'validadas' => Venta::whereIn('siat_evento_id', collect($resultado)->pluck('id'))->where('estado_siat', 'VALIDADA')->count(),
+            'restantes' => $this->porEnviar(Venta::query())->count(),
+        ]);
     }
 
     /** Consulta a Impuestos el estado real de la factura. */
@@ -460,8 +512,19 @@ class VentaController extends Controller
         });
     }
 
+    /** Facturas de ventas vigentes que todavía no llegaron a Impuestos. */
+    private function porEnviar($query)
+    {
+        return $query->where('tipo_comprobante', 'FACTURA')->where('estado', 'COMPLETADA')
+            ->whereIn('estado_siat', ['PENDIENTE', 'PENDIENTE_EVENTO']);
+    }
+
     private function filteredQuery(Request $request)
     {
+        if ($request->boolean('por_enviar')) {
+            // Sin fechas: lo que falta enviar se muestra completo, sea del día que sea.
+            return $this->porEnviar(Venta::query());
+        }
         $query = Venta::query();
         if ($search = trim((string) $request->input('q'))) {
             $query->where(fn ($q) => $q->where('numero', 'like', "%{$search}%")

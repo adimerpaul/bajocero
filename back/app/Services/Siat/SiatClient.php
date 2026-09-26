@@ -46,7 +46,7 @@ class SiatClient
 
     public function token(): string
     {
-        $token = SiatToken::where('vence_en', '>', now())->latest('id')->first()?->token_cifrado ?: config('siat.token');
+        $token = SiatToken::where('vence_en', '>', now())->latest('id')->first()?->token_cifrado;
         if (! $token) {
             throw new RuntimeException('No hay un token SIAT vigente. Regístrelo en Impuestos.');
         }

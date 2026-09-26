@@ -32,7 +32,7 @@ class FacturacionSiatTest extends TestCase
     {
         parent::setUp();
         Storage::fake('local');
-        config(['siat.enabled' => true, 'siat.nit' => '7308976010', 'siat.codigo_sistema' => 'SISTEMA', 'siat.token' => 'token']);
+        config(['siat.enabled' => true, 'siat.nit' => '7308976010', 'siat.codigo_sistema' => 'SISTEMA']);
         $this->siat = new FakeSiatClient;
         $this->app->instance(SiatClient::class, $this->siat);
     }
@@ -232,6 +232,27 @@ class FacturacionSiatTest extends TestCase
         $this->actingAs($user)->postJson("/api/ventas/{$venta['id']}/enviar-factura", ['email' => 'otro@correo.test'])->assertOk();
         Mail::assertSent(FacturaMail::class, fn (FacturaMail $mail) => $mail->hasTo('otro@correo.test'));
         $this->assertDatabaseHas('clientes', ['numero_documento' => '5115889', 'email' => 'otro@correo.test']);
+    }
+
+    public function test_enviar_todo_lo_pendiente_de_una_vez(): void
+    {
+        $user = $this->cajero();
+        $this->siat->offline = ['recepcionFactura'];
+        $this->venta($user)->assertJson(['estado_siat' => 'PENDIENTE_EVENTO']);
+        $this->venta($user)->assertJson(['estado_siat' => 'PENDIENTE_EVENTO']);
+        config(['siat.enabled' => false]);
+        $this->venta($user)->assertJson(['estado_siat' => 'PENDIENTE']);
+
+        $this->actingAs($user)->getJson('/api/ventas-resumen?desde=2000-01-01&hasta=2000-01-01')->assertJson(['por_enviar' => 3]);
+        $this->assertCount(3, $this->actingAs($user)->getJson('/api/ventas?por_enviar=1&desde=2000-01-01')->json('data'));
+
+        config(['siat.enabled' => true]);
+        $this->siat->offline = [];
+        $this->travel(5)->minutes();
+        $this->actingAs($user)->postJson('/api/ventas-enviar-pendientes', ['codigo_motivo' => 1])
+            ->assertOk()->assertJson(['reemitidas' => 1, 'validadas' => 2, 'restantes' => 0]);
+
+        $this->assertSame(3, Venta::where('estado_siat', 'VALIDADA')->count());
     }
 
     public function test_importe_en_letras(): void

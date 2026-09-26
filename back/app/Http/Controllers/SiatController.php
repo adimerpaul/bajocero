@@ -31,7 +31,6 @@ class SiatController extends Controller
             'sucursal' => config('siat.sucursal'),
             'punto_venta' => config('siat.punto_venta'),
             'municipio' => config('siat.municipio'),
-            'token_env' => (bool) config('siat.token'),
             'cuis' => $siat->cuisVigente(),
             'cufd' => $siat->cufdVigente(),
             'pendientes_evento' => $eventos->pendientes()->count(),

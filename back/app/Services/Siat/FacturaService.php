@@ -80,7 +80,8 @@ class FacturaService
             $xml = $this->armar($sale, $cufd, $date, 1);
             $archivo = gzencode($xml, 9);
             try {
-                $response = $this->client->call('ServicioFacturacionCompraVenta', 'recepcionFactura', [
+//                XXXXX aca
+                $response = $this->client->call('ServicioFacturacionCompraVentaXXXXX', 'recepcionFactura', [
                     'SolicitudServicioRecepcionFactura' => $this->solicitudFactura($cuis->codigo, $cufd->codigo, 1) + [
                         'archivo' => $archivo, 'fechaEnvio' => $date->format('Y-m-d\TH:i:s.v'), 'hashArchivo' => hash('sha256', $archivo),
                     ],

@@ -4,8 +4,7 @@
  * Facturación en línea SIAT — modalidad COMPUTARIZADA (2): el XML no se firma.
  *
  * Las credenciales de pruebas piloto viven en back/.env (no se versiona). El token
- * también se puede registrar desde la pantalla Impuestos; el guardado en la base de
- * datos tiene prioridad sobre SIAT_TOKEN.
+ * del SIAT se registra sólo en la base de datos, cifrado, desde la pantalla Impuestos.
  */
 return [
     'enabled' => (bool) env('SIAT_ENABLED', true),
@@ -17,7 +16,6 @@ return [
     'qr_url' => env('SIAT_QR_URL', 'https://pilotosiat.impuestos.gob.bo/consulta/QR'),
     'codigo_sistema' => env('SIAT_CODIGO_SISTEMA'),
     'nit' => env('SIAT_NIT'),
-    'token' => env('SIAT_TOKEN'),
     'sucursal' => (int) env('SIAT_SUCURSAL', 0),
     'punto_venta' => (int) env('SIAT_PUNTO_VENTA', 0),
     'municipio' => env('SIAT_MUNICIPIO', 'Oruro'),

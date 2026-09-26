@@ -16,10 +16,10 @@ const esc = value => String(value ?? '').replaceAll('&','&amp;').replaceAll('<',
 const money = value => Number(value || 0).toFixed(2)
 const qty = item => item.unidad === 'KG' ? Number(item.cantidad).toFixed(3) : Number(item.cantidad).toFixed(0)
 
-/** `formato`: 'auto' (factura si tiene CUF), 'factura' (formato de Impuestos) o 'comprobante' (ticket interno). */
-export async function printSale (sale, formato = 'auto') {
+/** Decide solo el formato: factura de Impuestos si la venta se facturó (tiene CUF), si no el comprobante. */
+export async function printSale (sale) {
   const element = document.createElement('div')
-  const factura = sale.tipo_comprobante === 'FACTURA' && sale.cuf && formato !== 'comprobante'
+  const factura = sale.tipo_comprobante === 'FACTURA' && sale.cuf
   element.innerHTML = factura ? await invoiceHtml(sale) : receiptHtml(sale)
   new Printd().print(element, [css])
 }

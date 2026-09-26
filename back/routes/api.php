@@ -61,6 +61,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/ventas-exportar/precios-modificados/excel', [VentaController::class, 'exportChangedPricesExcel']);
     Route::get('/ventas-exportar/precios-modificados/pdf', [VentaController::class, 'exportChangedPricesPdf']);
     Route::get('/ventas-motivos-anulacion', [VentaController::class, 'motivosAnulacion']);
+    Route::get('/ventas-motivos-evento', [VentaController::class, 'motivosEvento']);
+    Route::post('/ventas-enviar-pendientes', [VentaController::class, 'enviarPendientes']);
     Route::get('/ventas/{venta}', [VentaController::class, 'show']);
     Route::put('/ventas/{venta}/anular', [VentaController::class, 'cancel']);
     Route::get('/ventas/{venta}/verificar-factura', [VentaController::class, 'verificarFactura']);

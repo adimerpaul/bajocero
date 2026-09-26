@@ -34,7 +34,7 @@
 
           <div class="col-12 col-md-6"><q-card flat bordered><q-card-section class="row items-center q-pa-sm"><div class="text-weight-bold"><q-icon name="token" color="primary"/> Token del SIAT</div><q-space/><q-btn dense flat no-caps color="primary" icon="add" label="Registrar token" @click="tokenDialog=true"/></q-card-section>
             <q-list dense separator><q-item v-for="t in tokens" :key="t.id"><q-item-section><q-item-label>Token #{{t.id}}</q-item-label><q-item-label caption>Vence {{fecha(t.vence_en)}}</q-item-label></q-item-section><q-item-section side><q-btn dense flat round size="sm" icon="delete" color="negative" @click="deleteToken(t)"/></q-item-section></q-item>
-              <q-item v-if="!tokens.length"><q-item-section class="text-caption text-grey-7">{{estado.token_env?'Usando el token de SIAT_TOKEN (archivo .env).':'No hay token: regístrelo para poder facturar.'}}</q-item-section></q-item></q-list>
+              <q-item v-if="!tokens.length"><q-item-section class="text-caption text-grey-7">No hay token: regístrelo para poder facturar.</q-item-section></q-item></q-list>
           </q-card></div>
           <div class="col-12 col-md-6"><q-card flat bordered><q-card-section class="q-pa-sm text-weight-bold"><q-icon name="history" color="primary"/> Historial de CUFD</q-card-section>
             <q-table flat dense :rows="cufds" :columns="cufdColumns" row-key="id" hide-pagination :rows-per-page-options="[0]"/>

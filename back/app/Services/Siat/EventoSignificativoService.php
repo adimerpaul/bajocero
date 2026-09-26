@@ -131,19 +131,24 @@ class EventoSignificativoService
         if (! is_dir($directory)) {
             mkdir($directory, 0755, true);
         }
-        $tar = "{$directory}/evento_{$evento->id}_{$index}.tar";
-        foreach ([$tar, "{$tar}.gz"] as $path) {
-            if (is_file($path)) {
-                unlink($path);
+        // Nombre único: PharData recuerda los archivos por ruta dentro del mismo proceso,
+        // y reutilizar una ruta ya borrada falla. El paquete se borra apenas se lee.
+        $tar = "{$directory}/evento_{$evento->id}_{$index}_".uniqid().'.tar';
+        try {
+            $archive = new PharData($tar);
+            foreach ($ventas as $venta) {
+                $archive->addFromString("factura_{$venta->numero_factura}.xml", Storage::disk('local')->get($venta->xml_path));
+            }
+            $archive->compress(\Phar::GZ);
+            unset($archive);
+            $archivo = file_get_contents("{$tar}.gz");
+        } finally {
+            foreach ([$tar, "{$tar}.gz"] as $path) {
+                if (is_file($path)) {
+                    @unlink($path);
+                }
             }
         }
-        $archive = new PharData($tar);
-        foreach ($ventas as $venta) {
-            $archive->addFromString("factura_{$venta->numero_factura}.xml", Storage::disk('local')->get($venta->xml_path));
-        }
-        $archive->compress(\Phar::GZ);
-        unset($archive);
-        $archivo = file_get_contents("{$tar}.gz");
 
         $response = $this->client->call('ServicioFacturacionCompraVenta', 'recepcionPaqueteFactura', [
             'SolicitudServicioRecepcionPaquete' => $this->facturas->solicitudFactura($cuis, $evento->cufd, 2) + [
