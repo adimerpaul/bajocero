@@ -16,9 +16,10 @@ class ImagenController extends Controller
 {
     public function show(Request $request, string $archivo)
     {
-        $archivo = basename($archivo);
-        $path = public_path('images/'.$archivo);
-        abort_unless(is_file($path), 404, 'Imagen no encontrada');
+        // Puede venir con carpeta (empresa/logo.webp, productos/...), pero nunca fuera de public/images.
+        $base = realpath(public_path('images'));
+        $path = realpath(public_path('images/'.$archivo));
+        abort_unless($path && str_starts_with($path, $base.DIRECTORY_SEPARATOR) && is_file($path), 404, 'Imagen no encontrada');
 
         return response()->file($path, [
             'Cache-Control' => 'public, max-age=604800',
