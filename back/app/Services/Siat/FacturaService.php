@@ -109,8 +109,10 @@ class FacturaService
     {
         abort_unless($sale->cuf && $sale->estado_siat === 'VALIDADA', 422, 'Sólo se puede anular en Impuestos una factura validada');
         [$cuis, $cufd] = $this->siat->credenciales();
+        // Anular y verificar son consultas en línea: el SIN exige emisión 1 aunque la
+        // factura se haya emitido fuera de línea (tipo_emision 2).
         $response = $this->client->call('ServicioFacturacionCompraVenta', 'anulacionFactura', [
-            'SolicitudServicioAnulacionFactura' => $this->solicitudFactura($cuis->codigo, $cufd->codigo, (int) ($sale->tipo_emision ?: 1)) + [
+            'SolicitudServicioAnulacionFactura' => $this->solicitudFactura($cuis->codigo, $cufd->codigo, 1) + [
                 'codigoMotivo' => $motivo, 'cuf' => $sale->cuf,
             ],
         ]);
@@ -129,7 +131,7 @@ class FacturaService
         abort_unless($sale->cuf, 422, 'La venta no tiene CUF para consultar en Impuestos');
         [$cuis, $cufd] = $this->siat->credenciales();
         $response = $this->client->call('ServicioFacturacionCompraVenta', 'verificacionEstadoFactura', [
-            'SolicitudServicioVerificacionEstadoFactura' => $this->solicitudFactura($cuis->codigo, $cufd->codigo, (int) ($sale->tipo_emision ?: 1)) + ['cuf' => $sale->cuf],
+            'SolicitudServicioVerificacionEstadoFactura' => $this->solicitudFactura($cuis->codigo, $cufd->codigo, 1) + ['cuf' => $sale->cuf],
         ]);
         $code = (int) ($response->codigoEstado ?? 0);
         $estado = match (true) {
