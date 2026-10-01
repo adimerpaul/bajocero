@@ -288,6 +288,28 @@ class VentaController extends Controller
         ]);
     }
 
+    /** Manda sola, en su propio evento significativo, una factura emitida fuera de línea. */
+    public function enviarEvento(Request $request, Venta $venta, EventoSignificativoService $eventos)
+    {
+        $this->authorizeAction($request, ['Crear Ventas', 'Gestionar Impuestos']);
+        abort_unless($venta->tipo_comprobante === 'FACTURA' && $venta->estado === 'COMPLETADA' && $venta->estado_siat === 'PENDIENTE_EVENTO', 422, 'Sólo se envía por evento significativo una factura emitida sin conexión');
+        $data = $request->validate([
+            'codigo_motivo' => ['required', 'integer', Rule::in(array_keys(EventoSignificativoService::MOTIVOS))],
+            'descripcion' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        try {
+            $evento = $eventos->enviarPendientes((int) $data['codigo_motivo'], $data['descripcion'] ?? null, $request->user()->id, [$venta->id])[0];
+        } catch (HttpException $exception) {
+            throw $exception;
+        } catch (\Throwable $exception) {
+            report($exception);
+            abort(422, 'Impuestos no respondió: '.$exception->getMessage());
+        }
+
+        return response()->json(['evento' => $evento, 'venta' => $venta->fresh()->load('detalles')]);
+    }
+
     /** Consulta a Impuestos el estado real de la factura. */
     public function verificarFactura(Request $request, Venta $venta, FacturaService $facturas)
     {

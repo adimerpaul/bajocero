@@ -36,11 +36,14 @@ class EventoSignificativoService
             ->whereNotNull('cuf')->whereNotNull('xml_path');
     }
 
-    /** @return SiatEventoSignificativo[] */
-    public function enviarPendientes(int $motivo, ?string $descripcion, ?int $userId): array
+    /**
+     * @param  int[]|null  $ids  Sólo esas ventas; null manda todas las pendientes.
+     * @return SiatEventoSignificativo[]
+     */
+    public function enviarPendientes(int $motivo, ?string $descripcion, ?int $userId, ?array $ids = null): array
     {
         set_time_limit(600);
-        $grupos = $this->pendientes()->orderBy('fecha_emision_siat')->orderBy('id')->get()->groupBy('cufd');
+        $grupos = $this->pendientes()->when($ids !== null, fn ($q) => $q->whereIn('id', $ids))->orderBy('fecha_emision_siat')->orderBy('id')->get()->groupBy('cufd');
         abort_if($grupos->isEmpty(), 422, 'No hay facturas pendientes de envío');
 
         [$cuis, $cufd] = $this->siat->credenciales();

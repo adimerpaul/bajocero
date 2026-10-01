@@ -68,6 +68,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/ventas/{venta}/revertir-anulacion', [VentaController::class, 'revertirAnulacion']);
     Route::get('/ventas/{venta}/verificar-factura', [VentaController::class, 'verificarFactura']);
     Route::put('/ventas/{venta}/reemitir-factura', [VentaController::class, 'reemitirFactura']);
+    Route::post('/ventas/{venta}/enviar-evento', [VentaController::class, 'enviarEvento']);
     Route::get('/ventas/{venta}/factura-pdf', [VentaController::class, 'facturaPdf']);
     Route::post('/ventas/{venta}/enviar-factura', [VentaController::class, 'enviarFactura']);
 

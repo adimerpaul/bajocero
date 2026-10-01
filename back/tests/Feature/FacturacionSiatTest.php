@@ -264,6 +264,23 @@ class FacturacionSiatTest extends TestCase
         $this->assertDatabaseHas('clientes', ['numero_documento' => '5115889', 'email' => 'otro@correo.test']);
     }
 
+    public function test_enviar_una_sola_factura_por_evento_significativo(): void
+    {
+        $user = $this->cajero();
+        $this->siat->offline = ['recepcionFactura'];
+        $una = $this->venta($user)->assertJson(['estado_siat' => 'PENDIENTE_EVENTO'])->json('id');
+        $otra = $this->venta($user)->json('id');
+
+        $this->siat->offline = [];
+        $this->travel(5)->minutes();
+        $this->actingAs($user)->postJson("/api/ventas/{$una}/enviar-evento")->assertStatus(422); // falta el motivo
+        $this->actingAs($user)->postJson("/api/ventas/{$una}/enviar-evento", ['codigo_motivo' => 1])
+            ->assertOk()->assertJson(['evento' => ['estado' => 'VALIDADO', 'cantidad_facturas' => 1], 'venta' => ['estado_siat' => 'VALIDADA']]);
+
+        $this->assertSame('PENDIENTE_EVENTO', Venta::find($otra)->estado_siat);
+        $this->actingAs($user)->postJson("/api/ventas/{$una}/enviar-evento", ['codigo_motivo' => 1])->assertStatus(422); // ya validada
+    }
+
     public function test_enviar_todo_lo_pendiente_de_una_vez(): void
     {
         $user = $this->cajero();
