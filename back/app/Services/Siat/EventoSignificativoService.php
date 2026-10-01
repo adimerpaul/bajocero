@@ -46,7 +46,11 @@ class EventoSignificativoService
         $grupos = $this->pendientes()->when($ids !== null, fn ($q) => $q->whereIn('id', $ids))->orderBy('fecha_emision_siat')->orderBy('id')->get()->groupBy('cufd');
         abort_if($grupos->isEmpty(), 422, 'No hay facturas pendientes de envío');
 
-        [$cuis, $cufd] = $this->siat->credenciales();
+        // El evento se registra con un CUFD recién pedido, no con el guardado: si otra
+        // máquina pidió CUFD para el mismo punto de venta, el nuestro ya no es el vigente
+        // en el SIN y rechaza el evento con "CUFD INVALIDO".
+        $cuis = $this->siat->obtenerCuis();
+        $cufd = $this->siat->obtenerCufd(true);
         $this->esperarRelojSiat($grupos->flatten()->max('fecha_emision_siat'), $cuis->codigo);
         $eventos = [];
         foreach ($grupos as $cufdEvento => $ventas) {

@@ -277,6 +277,12 @@ class FacturacionSiatTest extends TestCase
         $this->actingAs($user)->postJson("/api/ventas/{$una}/enviar-evento", ['codigo_motivo' => 1])
             ->assertOk()->assertJson(['evento' => ['estado' => 'VALIDADO', 'cantidad_facturas' => 1], 'venta' => ['estado_siat' => 'VALIDADA']]);
 
+        // El evento va con un CUFD recién pedido; el de la contingencia queda como cufdEvento.
+        $registro = collect($this->siat->calls)->firstWhere('method', 'registroEventoSignificativo')['payload']['SolicitudEventoSignificativo'];
+        $this->assertSame(Venta::find($una)->cufd, $registro['cufdEvento']);
+        $this->assertNotSame($registro['cufdEvento'], $registro['cufd']);
+        $this->assertSame(SiatCufd::latest('id')->first()->codigo, $registro['cufd']);
+
         $this->assertSame('PENDIENTE_EVENTO', Venta::find($otra)->estado_siat);
         $this->actingAs($user)->postJson("/api/ventas/{$una}/enviar-evento", ['codigo_motivo' => 1])->assertStatus(422); // ya validada
     }
@@ -342,7 +348,7 @@ class FakeSiatClient extends SiatClient
 
         return (object) match ($method) {
             'cuis' => ['codigo' => 'CUIS1', 'fechaVigencia' => now()->addYear()->toIso8601String(), 'transaccion' => true],
-            'cufd' => ['codigo' => 'CUFD1', 'codigoControl' => 'CTRL1', 'direccion' => 'CALLE CHARCAS', 'fechaVigencia' => now()->addDay()->toIso8601String(), 'transaccion' => true],
+            'cufd' => ['codigo' => 'CUFD'.count($this->calls), 'codigoControl' => 'CTRL1', 'direccion' => 'CALLE CHARCAS', 'fechaVigencia' => now()->addDay()->toIso8601String(), 'transaccion' => true],
             'recepcionFactura' => $this->rechazar
                 ? ['transaccion' => false, 'codigoEstado' => 902, 'mensajesList' => (object) ['codigo' => 1, 'descripcion' => 'NIT INVALIDO']]
                 : ['transaccion' => true, 'codigoEstado' => 908, 'codigoRecepcion' => 'REC-'.count($this->calls)],
