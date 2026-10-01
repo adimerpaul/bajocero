@@ -611,6 +611,58 @@ class VentaController extends Controller
         return response()->json($venta->fresh());
     }
 
+    /**
+     * Revierte en Impuestos la anulación de una factura y deja la venta vigente otra
+     * vez: vuelve a descontar el stock, primero de los mismos lotes y lo que falte por
+     * FIFO. Si ya no hay stock no se toca el SIN, y si el SIN lo rechaza todo se deshace.
+     */
+    public function revertirAnulacion(Request $request, Venta $venta, FacturaService $facturas)
+    {
+        $this->authorizeAction($request, 'Anular Ventas');
+        abort_unless($venta->tipo_comprobante === 'FACTURA' && $venta->estado === 'ANULADA' && $venta->estado_siat === 'ANULADA', 422, 'Sólo se revierte una factura anulada en Impuestos');
+
+        DB::transaction(function () use ($venta, $facturas) {
+            $details = $venta->detalles()->where('descuenta_stock', true)->get();
+            $products = Producto::whereIn('id', $details->pluck('producto_id'))->lockForUpdate()->get()->keyBy('id');
+            foreach ($details->groupBy('producto_id') as $productId => $lines) {
+                $product = $products[$productId] ?? null;
+                abort_unless($product && (float) $product->stock_inicial + 0.0001 >= (float) $lines->sum('cantidad'), 422, 'Stock insuficiente para '.($product->nombre ?? $lines->first()->nombre).': no se puede revertir la anulación');
+            }
+
+            try {
+                $result = $facturas->revertirAnulacion($venta);
+            } catch (\RuntimeException $exception) {
+                abort(422, $exception->getMessage());
+            }
+            abort_unless($result['revertida'], 422, $result['mensaje']);
+
+            foreach ($details as $detail) {
+                $products[$detail->producto_id]->decrement('stock_inicial', $detail->cantidad);
+                $previous = DB::table('venta_detalle_lotes')->where('venta_detalle_id', $detail->id)->pluck('lote_id')->all();
+                DB::table('venta_detalle_lotes')->where('venta_detalle_id', $detail->id)->delete();
+                $lots = Lote::where('producto_id', $detail->producto_id)->where('cantidad_disponible', '>', 0)
+                    ->orderByRaw('CASE WHEN id IN ('.(implode(',', array_map('intval', $previous)) ?: '0').') THEN 0 ELSE 1 END')
+                    ->orderByRaw('fecha_vencimiento IS NULL')->orderBy('fecha_vencimiento')->orderBy('id')->lockForUpdate()->get();
+                $remaining = (float) $detail->cantidad;
+                foreach ($lots as $lot) {
+                    if ($remaining <= 0.0001) {
+                        break;
+                    }
+                    $taken = min($remaining, (float) $lot->cantidad_disponible);
+                    $lot->decrement('cantidad_disponible', $taken);
+                    DB::table('venta_detalle_lotes')->insert([
+                        'venta_detalle_id' => $detail->id, 'lote_id' => $lot->id,
+                        'cantidad' => $taken, 'created_at' => now(), 'updated_at' => now(),
+                    ]);
+                    $remaining = round($remaining - $taken, 3);
+                }
+            }
+            $venta->update(['estado' => 'COMPLETADA']);
+        });
+
+        return response()->json($venta->fresh());
+    }
+
     private function clientRules(): array
     {
         return [

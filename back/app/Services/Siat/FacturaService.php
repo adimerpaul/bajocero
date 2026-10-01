@@ -125,6 +125,23 @@ class FacturaService
         return ['anulada' => $ok, 'mensaje' => $mensaje ?: ($ok ? 'Factura anulada en Impuestos' : 'Impuestos rechazó la anulación')];
     }
 
+    /** Deshace en el SIN la anulación de una factura; vuelve a quedar VALIDADA. */
+    public function revertirAnulacion(Venta $sale): array
+    {
+        abort_unless($sale->cuf && $sale->estado_siat === 'ANULADA', 422, 'Sólo se revierte en Impuestos una factura anulada');
+        [$cuis, $cufd] = $this->siat->credenciales();
+        $response = $this->client->call('ServicioFacturacionCompraVenta', 'reversionAnulacionFactura', [
+            'SolicitudServicioReversionAnulacionFactura' => $this->solicitudFactura($cuis->codigo, $cufd->codigo, 1) + ['cuf' => $sale->cuf],
+        ]);
+        $ok = (bool) ($response->transaccion ?? false);
+        $mensaje = SiatClient::mensaje($response) ?: ($response->codigoDescripcion ?? null);
+        if ($ok) {
+            $sale->update(['estado_siat' => 'VALIDADA', 'siat_mensaje' => null]);
+        }
+
+        return ['revertida' => $ok, 'mensaje' => $mensaje ?: ($ok ? 'Anulación revertida en Impuestos' : 'Impuestos rechazó la reversión')];
+    }
+
     /** Consulta al SIN el estado real de la factura y lo guarda. */
     public function verificar(Venta $sale): array
     {

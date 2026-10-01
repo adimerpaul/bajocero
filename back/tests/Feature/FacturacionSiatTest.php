@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Mail\FacturaMail;
 use App\Models\Categoria;
 use App\Models\Cliente;
+use App\Models\Lote;
 use App\Models\Producto;
 use App\Models\SiatCufd;
 use App\Models\User;
@@ -85,7 +86,7 @@ class FacturacionSiatTest extends TestCase
 
         $response->assertCreated()->assertJson(['tipo_comprobante' => 'FACTURA', 'numero_factura' => 1, 'estado_siat' => 'VALIDADA', 'tipo_emision' => 1]);
         $this->assertStringContainsString('cuf=', $response->json('factura_url'));
-        $this->assertDatabaseHas('clientes', ['numero_documento' => '5115889', 'complemento' => '1A', 'nombre' => 'JUAN PEREZ']);
+        $this->assertDatabaseHas('clientes', ['numero_documento' => '5115889', 'complemento' => '1A', 'nombre' => 'juan perez']);
 
         $xml = Storage::disk('local')->get(Venta::first()->xml_path);
         $doc = new DOMDocument;
@@ -180,6 +181,35 @@ class FacturacionSiatTest extends TestCase
 
         $this->assertSame(1, collect($this->siat->calls)->where('method', 'anulacionFactura')->count());
         $this->assertEqualsWithDelta(50, (float) Producto::find($venta['detalles'][0]['producto_id'])->stock_inicial, 0.001);
+    }
+
+    public function test_revertir_la_anulacion_en_impuestos_vuelve_a_descontar_el_stock(): void
+    {
+        $user = $this->cajero();
+        $venta = $this->venta($user)->json();
+        $pollo = $venta['detalles'][0]['producto_id'];
+        $lote = Lote::create(['producto_id' => $pollo, 'cantidad_inicial' => 5, 'cantidad_disponible' => 5]);
+
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/revertir-anulacion")->assertStatus(422); // no está anulada
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/anular", ['codigo_motivo' => 1])->assertOk();
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/revertir-anulacion")
+            ->assertOk()->assertJson(['estado' => 'COMPLETADA', 'estado_siat' => 'VALIDADA']);
+
+        $this->assertSame(1, collect($this->siat->calls)->where('method', 'reversionAnulacionFactura')->count());
+        $this->assertEqualsWithDelta(50 - 1.355, (float) Producto::find($pollo)->stock_inicial, 0.001);
+        $this->assertEqualsWithDelta(5 - 1.355, (float) $lote->fresh()->cantidad_disponible, 0.001);
+    }
+
+    public function test_sin_stock_no_se_revierte_ni_se_llama_a_impuestos(): void
+    {
+        $user = $this->cajero();
+        $venta = $this->venta($user)->json();
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/anular", ['codigo_motivo' => 1])->assertOk();
+        Producto::whereKey($venta['detalles'][0]['producto_id'])->update(['stock_inicial' => 1]);
+
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/revertir-anulacion")->assertStatus(422);
+        $this->assertSame(0, collect($this->siat->calls)->where('method', 'reversionAnulacionFactura')->count());
+        $this->assertSame('ANULADA', Venta::find($venta['id'])->estado_siat);
     }
 
     public function test_una_venta_offline_de_la_caja_se_factura_con_la_hora_del_cobro(): void
