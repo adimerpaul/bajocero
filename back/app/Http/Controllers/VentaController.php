@@ -637,7 +637,7 @@ class VentaController extends Controller
         }
         $type = $data['tipo_documento'] ?? 'CI';
         $complement = mb_strtoupper(trim((string) ($data['complemento'] ?? '')));
-        $name = mb_strtoupper(trim((string) ($data['cliente_nombre'] ?? ''))) ?: 'S/N';
+        $name = trim((string) ($data['cliente_nombre'] ?? '')) ?: 'S/N';
         $client = Cliente::withTrashed()->firstOrNew(['tipo_documento' => $type, 'numero_documento' => $document, 'complemento' => $complement]);
         $client->fill(['nombre' => $name] + (empty($data['cliente_email']) ? [] : ['email' => $data['cliente_email']]));
         $client->deleted_at = null;

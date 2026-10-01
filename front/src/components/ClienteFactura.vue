@@ -12,7 +12,7 @@
         </q-menu>
       </q-input>
       <q-input v-if="cliente.tipo_documento==='CI'&&documento" v-model="cliente.complemento" v-uppercase dense outlined label="Compl." maxlength="5" class="col-3"/>
-      <q-input v-if="documento" v-model="cliente.cliente_nombre" v-uppercase dense outlined label="Nombre / razón social" class="col-12" :disable="!documento"/>
+      <q-input v-if="documento" v-model="cliente.cliente_nombre" dense outlined label="Nombre / razón social" class="col-12" :disable="!documento"/>
       <q-input v-if="documento" v-model="cliente.cliente_email" dense outlined type="email" label="Correo (opcional)" class="col-12"/>
       <div v-if="cliente.tipo_documento==='NIT'&&nitValido===false" class="col-12">
         <q-banner dense rounded class="bg-orange-1 text-orange-10"><q-icon name="warning" class="q-mr-xs"/>El NIT no existe en el padrón de Impuestos.
