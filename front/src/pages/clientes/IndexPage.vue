@@ -12,8 +12,8 @@
     <q-dialog v-model="dialog"><q-card style="width:480px;max-width:94vw"><q-form @submit="save">
       <q-card-section class="row items-center q-py-sm"><div class="text-subtitle1 text-weight-bold">{{form.id?'Editar cliente':'Nuevo cliente'}}</div><q-space/><q-btn flat round dense icon="close" v-close-popup/></q-card-section><q-separator/>
       <q-card-section class="row q-col-gutter-sm">
-        <q-select v-model="form.tipo_documento" :options="['CI','NIT','CEX','PAS','OD']" dense outlined label="Tipo" class="col-3"/>
-        <q-input v-model="form.numero_documento" dense outlined label="Número de documento *" class="col" @blur="checkNit"/>
+        <q-select v-model="form.tipo_documento" :options="['CI','NIT','CEX','PAS','OD']" dense outlined label="Tipo" class="col-3" @update:model-value="onTipoDocChange"/>
+        <q-input v-model="form.numero_documento" dense outlined :label="labelDoc" :inputmode="soloNum ? 'numeric' : 'text'" class="col" @keydown="onKeydownDoc" @update:model-value="onDocInput" @blur="checkNit"/>
         <q-input v-if="form.tipo_documento==='CI'" v-model="form.complemento" v-uppercase dense outlined label="Compl." maxlength="5" class="col-2"/>
         <div v-if="nitValido!==null" class="col-12 text-caption" :class="nitValido?'text-positive':'text-negative'"><q-icon :name="nitValido?'verified':'error'"/> {{nitValido?'NIT activo en el padrón de Impuestos':'El NIT no existe en el padrón de Impuestos'}}</div>
         <q-input v-model="form.nombre" v-uppercase dense outlined label="Nombre / razón social *" class="col-12"/>
@@ -26,11 +26,46 @@
   </q-page>
 </template>
 <script setup>
-import { getCurrentInstance, reactive, ref } from 'vue'
+import { computed, getCurrentInstance, reactive, ref } from 'vue'
 const {proxy}=getCurrentInstance(),rows=ref([]),search=ref(''),loading=ref(false),dialog=ref(false),saving=ref(false),nitValido=ref(null),can=p=>proxy.$store.hasPermission(p)
 const empty=()=>({id:null,tipo_documento:'CI',numero_documento:'',complemento:'',nombre:'',email:'',telefono:'',direccion:''}),form=reactive(empty())
 const pagination=ref({page:1,rowsPerPage:20,rowsNumber:0})
 const columns=[{name:'nombre',label:'Nombre / razón social',field:'nombre',align:'left'},{name:'documento',label:'Documento',field:'numero_documento',align:'left'},{name:'contacto',label:'Contacto',field:'email',align:'left'},{name:'ventas_count',label:'Compras',field:'ventas_count',align:'center'},{name:'actions',label:'',align:'right'}]
+
+const soloNum=computed(()=>['CI','NIT'].includes(form.tipo_documento))
+const labelDoc=computed(()=>{
+  if(form.tipo_documento==='NIT')return 'NIT *'
+  if(form.tipo_documento==='CI')return 'Cédula de Identidad (CI) *'
+  if(form.tipo_documento==='PAS')return 'Pasaporte *'
+  if(form.tipo_documento==='CEX')return 'Doc. Extranjero (CEX) *'
+  return 'Número de documento *'
+})
+
+function onKeydownDoc(e){
+  if(e.key&&e.key.length>1)return
+  if(e.ctrlKey||e.metaKey||e.altKey)return
+  if(soloNum.value){
+    if(!/^\d$/.test(e.key))e.preventDefault()
+  }else{
+    if(!/^[a-zA-Z0-9]$/.test(e.key))e.preventDefault()
+  }
+}
+
+function onDocInput(val){
+  const str=String(val??'')
+  const limpio=soloNum.value?str.replace(/\D/g,''):str.replace(/[^a-zA-Z0-9]/g,'').toUpperCase()
+  if(limpio!==str)form.numero_documento=limpio
+}
+
+function onTipoDocChange(nuevoTipo){
+  nitValido.value=null
+  if(nuevoTipo!=='CI')form.complemento=''
+  const str=String(form.numero_documento||'')
+  if(str){
+    form.numero_documento=['CI','NIT'].includes(nuevoTipo)?str.replace(/\D/g,''):str.replace(/[^a-zA-Z0-9]/g,'').toUpperCase()
+  }
+}
+
 function load(resetPage=false){onRequest({pagination:resetPage?{...pagination.value,page:1}:pagination.value})}
 function onRequest({pagination:p}){loading.value=true;proxy.$axios.get('/clientes',{params:{q:search.value,page:p.page,per_page:p.rowsPerPage}}).then(r=>{rows.value=r.data.data;pagination.value={...p,rowsNumber:r.data.total}}).catch(e=>proxy.$alert.error(e.response?.data?.message||'No se pudieron cargar los clientes')).finally(()=>loading.value=false)}
 function openForm(row=null){Object.assign(form,empty(),row||{});nitValido.value=null;dialog.value=true}

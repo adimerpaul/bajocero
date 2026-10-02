@@ -248,7 +248,18 @@ class FacturacionSiatTest extends TestCase
         $this->assertStringStartsWith('%PDF', $pdf->getContent());
 
         $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/anular", ['codigo_motivo' => 1])->assertOk();
-        Mail::assertSent(FacturaMail::class, fn (FacturaMail $mail) => $mail->anulada && $mail->motivo === 'FACTURA MAL EMITIDA');
+        Mail::assertSent(FacturaMail::class, function (FacturaMail $mail) {
+            $hasXml = collect($mail->attachments())->contains(fn ($a) => str_ends_with($a->as, '.xml'));
+
+            return $mail->anulada && $mail->motivo === 'FACTURA MAL EMITIDA' && $hasXml;
+        });
+
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/revertir-anulacion")->assertOk();
+        Mail::assertSent(FacturaMail::class, function (FacturaMail $mail) {
+            $hasXml = collect($mail->attachments())->contains(fn ($a) => str_ends_with($a->as, '.xml'));
+
+            return $mail->hasTo('juan@correo.test') && $mail->revertida && ! $mail->anulada && $hasXml;
+        });
     }
 
     public function test_sin_correo_no_se_envia_y_se_puede_mandar_despues(): void
@@ -327,6 +338,45 @@ class FacturacionSiatTest extends TestCase
         // Al volver a registrarlo se revive el mismo cliente.
         $this->actingAs($user)->postJson('/api/clientes', ['tipo_documento' => 'NIT', 'numero_documento' => '7308976010', 'nombre' => 'empresa 2'])
             ->assertCreated()->assertJson(['id' => $id, 'nombre' => 'EMPRESA 2']);
+    }
+
+    public function test_factura_con_excepcion_de_nit_envia_codigo_excepcion_uno_en_el_xml(): void
+    {
+        $user = $this->cajero();
+
+        // 1. Factura con NIT y excepcion = true -> <codigoExcepcion>1</codigoExcepcion>
+        $response = $this->venta($user, [
+            'tipo_documento' => 'NIT',
+            'numero_documento' => '123456789',
+            'cliente_nombre' => 'CLIENTE EXCEPCION',
+            'codigo_excepcion' => true,
+        ]);
+        $response->assertCreated()->assertJson(['estado_siat' => 'VALIDADA']);
+        $ventaConExcepcion = Venta::find($response->json('id'));
+        $this->assertSame(1, (int) $ventaConExcepcion->codigo_excepcion);
+
+        $xml = Storage::disk('local')->get($ventaConExcepcion->xml_path);
+        $this->assertStringContainsString('<codigoExcepcion>1</codigoExcepcion>', $xml);
+        $doc = new DOMDocument;
+        $doc->loadXML($xml);
+        $this->assertTrue($doc->schemaValidate(resource_path('siat/facturaComputarizadaCompraVenta.xsd')));
+
+        // 2. Factura sin excepcion -> <codigoExcepcion xsi:nil="true"/>
+        $responseNormal = $this->venta($user, [
+            'tipo_documento' => 'NIT',
+            'numero_documento' => '987654321',
+            'cliente_nombre' => 'CLIENTE NORMAL',
+            'codigo_excepcion' => false,
+        ]);
+        $responseNormal->assertCreated()->assertJson(['estado_siat' => 'VALIDADA']);
+        $ventaNormal = Venta::find($responseNormal->json('id'));
+        $this->assertNull($ventaNormal->codigo_excepcion);
+
+        $xmlNormal = Storage::disk('local')->get($ventaNormal->xml_path);
+        $this->assertStringContainsString('<codigoExcepcion xsi:nil="true"/>', $xmlNormal);
+        $docNormal = new DOMDocument;
+        $docNormal->loadXML($xmlNormal);
+        $this->assertTrue($docNormal->schemaValidate(resource_path('siat/facturaComputarizadaCompraVenta.xsd')));
     }
 }
 
