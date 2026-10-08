@@ -39,6 +39,7 @@ class AlmacenController extends Controller
         ]);
     }
 
+    /** Sólo la cabecera: el detalle se pide paginado en detalles(), así el sondeo de cada celular pesa poco. */
     public function show(Request $request, Almacen $almacen)
     {
         $this->authorizeAction($request, 'Ver Almacenes');
@@ -46,35 +47,67 @@ class AlmacenController extends Controller
         return response()->json($this->withDetails($almacen));
     }
 
-    /** Vista de avance: cuánto del catálogo se revisó y qué diferencias aparecieron. */
+    /**
+     * Líneas contadas, paginadas. Cada una trae stock_actual (el del sistema con el
+     * que se compara) y diferencia_actual calculados en SQL, para poder filtrar sólo
+     * diferencias sin bajar todo el documento.
+     */
+    public function detalles(Request $request, Almacen $almacen)
+    {
+        $this->authorizeAction($request, 'Ver Almacenes');
+        [$query, $system] = $this->detailsQuery($almacen);
+        $query->select('almacen_detalles.*')
+            ->selectRaw("{$system} as stock_actual")
+            ->selectRaw("ROUND(almacen_detalles.cantidad - {$system}, 3) as diferencia_actual")
+            ->with('conteos');
+
+        if ($search = trim((string) $request->input('q'))) {
+            $query->where(fn ($q) => $q->where('almacen_detalles.nombre', 'like', "%{$search}%")
+                ->orWhere('almacen_detalles.codigo', 'like', "%{$search}%")
+                ->orWhere('almacen_detalles.usuario_nombre', 'like', "%{$search}%"));
+        }
+        if ($ids = array_filter(array_map('intval', (array) $request->input('producto_ids', [])))) {
+            $query->whereIn('almacen_detalles.producto_id', $ids);
+        }
+        if ($request->boolean('solo_diferencias')) {
+            $query->whereRaw("ABS(almacen_detalles.cantidad - {$system}) > 0.0001");
+        }
+        $request->input('orden') === 'nombre'
+            ? $query->orderBy('almacen_detalles.nombre')->orderBy('almacen_detalles.id')
+            : $query->orderByDesc('almacen_detalles.id');
+
+        $page = $query->paginate(min(max((int) $request->input('per_page', 20), 1), 100));
+
+        // El estado viaja en el sondeo para enterarse si otro ya aplicó o anuló la revisión.
+        return response()->json(['estado' => $almacen->estado] + $page->toArray());
+    }
+
+    /** Vista de avance: totales calculados en SQL; las líneas se piden aparte, paginadas, en detalles(). */
     public function progress(Request $request, Almacen $almacen)
     {
         $this->authorizeAction($request, 'Ver Almacenes');
-        $details = $almacen->detalles()->with(['producto:id,stock_inicial', 'conteos'])->orderBy('nombre')->get();
-        $applied = $almacen->estado === 'APLICADO';
-
-        $rows = $details->map(function ($detail) use ($applied) {
-            $system = $applied ? (float) $detail->stock_anterior : (float) ($detail->producto?->stock_inicial ?? $detail->stock_sistema);
-            $counted = (float) $detail->cantidad;
-            $detail->stock_actual = $system;
-            $detail->diferencia_actual = round($counted - $system, 3);
-
-            return $detail;
-        });
-
-        $withDifference = $rows->filter(fn ($d) => abs((float) $d->diferencia_actual) > 0.0001);
+        [$query, $system] = $this->detailsQuery($almacen);
+        $diff = "ROUND(almacen_detalles.cantidad - {$system}, 3)";
+        $totals = $query->selectRaw("COUNT(*) as revisados,
+            COALESCE(SUM(CASE WHEN ABS({$diff}) > 0.0001 THEN 1 ELSE 0 END), 0) as con_diferencia,
+            COALESCE(SUM(CASE WHEN {$diff} > 0.0001 THEN 1 ELSE 0 END), 0) as sobrantes,
+            COALESCE(SUM(CASE WHEN {$diff} > 0.0001 THEN {$diff} ELSE 0 END), 0) as sobrante_total,
+            COALESCE(SUM(CASE WHEN {$diff} < -0.0001 THEN 1 ELSE 0 END), 0) as faltantes,
+            COALESCE(SUM(CASE WHEN {$diff} < -0.0001 THEN -{$diff} ELSE 0 END), 0) as faltante_total,
+            COALESCE(SUM({$diff} * almacen_detalles.precio_compra), 0) as diferencia_valor")->first();
 
         return response()->json([
             'almacen' => $almacen,
-            'detalles' => $rows->values(),
             'total_productos' => Producto::count(),
-            'revisados' => $rows->count(),
-            'con_diferencia' => $withDifference->count(),
-            'sin_diferencia' => $rows->count() - $withDifference->count(),
-            'diferencia_valor' => round($rows->sum(fn ($d) => (float) $d->diferencia_actual * (float) $d->precio_compra), 2),
-            'por_usuario' => $rows->groupBy('usuario_nombre')->map(fn ($group, $name) => [
-                'usuario' => $name ?: '—', 'productos' => $group->count(),
-            ])->values(),
+            'revisados' => (int) $totals->revisados,
+            'con_diferencia' => (int) $totals->con_diferencia,
+            'sin_diferencia' => (int) $totals->revisados - (int) $totals->con_diferencia,
+            'sobrantes' => ['count' => (int) $totals->sobrantes, 'total' => round((float) $totals->sobrante_total, 3)],
+            'faltantes' => ['count' => (int) $totals->faltantes, 'total' => round((float) $totals->faltante_total, 3)],
+            'diferencia_valor' => round((float) $totals->diferencia_valor, 2),
+            'por_usuario' => $almacen->detalles()->selectRaw('usuario_nombre, COUNT(*) as productos')
+                ->groupBy('usuario_nombre')->orderByDesc('productos')->get()
+                ->map(fn ($row) => ['usuario' => $row->usuario_nombre ?: '—', 'productos' => (int) $row->productos]),
         ]);
     }
 
@@ -400,12 +433,26 @@ class AlmacenController extends Controller
         ]);
     }
 
-    /** El detalle viaja con el stock actual del producto para poder mostrar la diferencia. */
+    /** Cabecera con la cantidad de líneas; el detalle no viaja aquí porque puede pesar cientos de KB. */
     private function withDetails(Almacen $almacen): Almacen
     {
-        $almacen->load(['detalles' => fn ($query) => $query->with(['producto:id,stock_inicial,unidad', 'conteos'])->orderByDesc('id')]);
+        return $almacen->loadCount('detalles');
+    }
 
-        return $almacen;
+    /**
+     * Líneas del almacén unidas a su producto. Se compara contra el stock guardado al
+     * aplicar, o contra el stock vivo del producto mientras está en revisión (si el
+     * producto se eliminó, el que se guardó al contar).
+     */
+    private function detailsQuery(Almacen $almacen): array
+    {
+        $system = $almacen->estado === 'APLICADO'
+            ? 'COALESCE(almacen_detalles.stock_anterior, 0)'
+            : 'COALESCE(productos.stock_inicial, almacen_detalles.stock_sistema, 0)';
+        $query = AlmacenDetalle::query()->where('almacen_detalles.almacen_id', $almacen->id)
+            ->leftJoin('productos', fn ($join) => $join->on('productos.id', '=', 'almacen_detalles.producto_id')->whereNull('productos.deleted_at'));
+
+        return [$query, $system];
     }
 
     private function filteredQuery(Request $request)

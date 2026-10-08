@@ -12,7 +12,7 @@
       </div>
       <q-space/>
       <q-btn v-if="editable" dense flat icon="fact_check" label="Seguir llenando" no-caps class="q-mr-xs" :to="`/inventario/${id}`"/>
-      <q-btn dense flat round icon="refresh" :loading="loading" class="q-mr-xs" @click="load()"><q-tooltip>Actualizar</q-tooltip></q-btn>
+      <q-btn dense flat round icon="refresh" :loading="loading||loadingRows" class="q-mr-xs" @click="refresh()"><q-tooltip>Actualizar</q-tooltip></q-btn>
       <q-btn v-if="editable&&can('Aplicar Almacenes')" dense unelevated color="positive" icon="published_with_changes" label="Actualizar productos" no-caps :loading="applying" :disable="!data.revisados" @click="apply"/>
     </div>
 
@@ -38,10 +38,11 @@
       <q-card-section class="row items-center q-py-sm">
         <q-icon name="difference" color="primary" size="20px" class="q-mr-xs"/><b>Detalle de la revisión</b>
         <q-space/>
-        <q-checkbox v-model="onlyDifferences" dense size="sm" label="Sólo diferencias" class="text-caption"/>
+        <q-input v-model="rowsSearch" dense outlined clearable placeholder="Buscar" class="q-mr-sm search-box" @update:model-value="handleRowsSearch"><template #prepend><q-icon name="search" size="18px"/></template></q-input>
+        <q-checkbox v-model="onlyDifferences" dense size="sm" label="Sólo diferencias" class="text-caption" @update:model-value="reloadRows"/>
       </q-card-section>
       <q-separator/>
-      <q-table flat dense :rows="rows" :columns="columns" row-key="id" :loading="loading" :pagination="{rowsPerPage:0}" hide-pagination>
+      <q-table flat dense :rows="rows" :columns="columns" row-key="id" :loading="loadingRows" v-model:pagination="pagination" :rows-per-page-options="[25,50,100]" binary-state-sort @request="onRequest">
         <template #body-cell-producto="p"><q-td :props="p"><b>{{p.row.nombre}}</b><div class="text-caption text-grey-7">{{p.row.codigo}} · {{p.row.unidad}}</div></q-td></template>
         <template #body-cell-sistema="p"><q-td :props="p" class="text-right">{{qty(p.row.stock_actual,p.row.unidad)}}</q-td></template>
         <template #body-cell-contado="p"><q-td :props="p" class="text-right text-weight-bold">{{qty(p.row.cantidad,p.row.unidad)}}</q-td></template>
@@ -85,9 +86,9 @@
         <q-separator/>
         <q-card-section class="row items-center q-py-xs">
           <q-icon name="difference" size="18px" color="deep-orange" class="q-mr-xs"/>
-          <b class="text-caption">{{confirmAll?'Todos los productos revisados':'Productos con diferencia'}} ({{confirmRows.length}})</b>
+          <b class="text-caption">{{confirmAll?'Todos los productos revisados':'Productos con diferencia'}} ({{confirmTotal}})</b>
           <q-space/>
-          <q-toggle v-model="confirmAll" dense size="sm" color="primary" label="Ver también los que cuadran" class="text-caption"/>
+          <q-toggle v-model="confirmAll" dense size="sm" color="primary" label="Ver también los que cuadran" class="text-caption" @update:model-value="confirmPage=1;loadConfirm()"/>
         </q-card-section>
         <q-separator/>
 
@@ -110,9 +111,13 @@
                 <td class="text-right"><span class="text-grey-6">{{qty(row.stock_actual,row.unidad)}}</span> → <b>{{qty(row.cantidad,row.unidad)}}</b></td>
                 <td class="text-right" :class="rowValue(row)<0?'text-negative':rowValue(row)>0?'text-positive':'text-grey-6'">{{money(rowValue(row))}}</td>
               </tr>
-              <tr v-if="!confirmRows.length"><td colspan="6" class="text-center text-grey-6 q-py-lg">Todo cuadra con el sistema</td></tr>
+              <tr v-if="!confirmRows.length&&!loadingConfirm"><td colspan="6" class="text-center text-grey-6 q-py-lg">Todo cuadra con el sistema</td></tr>
             </tbody>
           </q-markup-table>
+          <q-inner-loading :showing="loadingConfirm"/>
+        </div>
+        <div v-if="confirmLastPage>1" class="row justify-center q-py-xs">
+          <q-pagination v-model="confirmPage" :max="confirmLastPage" :max-pages="5" boundary-numbers direction-links color="primary" size="sm" @update:model-value="loadConfirm"/>
         </div>
 
         <q-separator/>
@@ -136,9 +141,12 @@ import { useRoute, useRouter } from 'vue-router'
 const {proxy}=getCurrentInstance(),route=useRoute(),router=useRouter()
 const id=Number(route.params.id)
 const almacen=reactive({numero:'',estado:'BORRADOR',descripcion:'',aplicado_por_nombre:null,fecha_aplicado:null})
-const data=reactive({detalles:[],total_productos:0,revisados:0,con_diferencia:0,sin_diferencia:0,diferencia_valor:0,por_usuario:[]})
+const data=reactive({total_productos:0,revisados:0,con_diferencia:0,sin_diferencia:0,diferencia_valor:0,sobrantes:{count:0,total:0},faltantes:{count:0,total:0},por_usuario:[]})
 const loading=ref(false),applying=ref(false),onlyDifferences=ref(false),confirmDialog=ref(false),confirmAll=ref(false)
-let refreshTimer=null
+// El detalle viaja paginado desde /detalles: el documento completo pesaba cientos de KB en cada refresco.
+const rows=ref([]),loadingRows=ref(false),rowsSearch=ref(''),pagination=ref({page:1,rowsPerPage:25,rowsNumber:0})
+const confirmRows=ref([]),loadingConfirm=ref(false),confirmPage=ref(1),confirmLastPage=ref(1),confirmTotal=ref(0)
+let refreshTimer=null,rowsSearchTimer=null
 const can=p=>proxy.$store.hasPermission(p),money=v=>Number(v||0).toFixed(2)
 const qty=(value,unit)=>Number(value||0).toFixed(unit==='KG'?3:0)
 const formatDate=value=>value?new Date(value).toLocaleString('es-BO'):''
@@ -149,12 +157,8 @@ const progress=computed(()=>data.total_productos?Math.min(1,data.revisados/data.
 const diff=row=>Number(row.diferencia_actual||0)
 const diffLabel=row=>`${diff(row)>0?'+':''}${diff(row).toFixed(row.unidad==='KG'?3:0)}`
 const diffColor=row=>Math.abs(diff(row))<0.0005?'grey-6':diff(row)>0?'positive':'negative'
-const rows=computed(()=>onlyDifferences.value?data.detalles.filter(d=>Math.abs(diff(d))>0.0005):data.detalles)
-// Resumen del diálogo de confirmación: sobrantes, faltantes y valor de cada línea.
-const differences=computed(()=>data.detalles.filter(d=>Math.abs(diff(d))>0.0005))
-const confirmRows=computed(()=>confirmAll.value?data.detalles:differences.value)
-const surplus=computed(()=>{const list=differences.value.filter(d=>diff(d)>0);return {count:list.length,total:list.reduce((s,d)=>s+diff(d),0)}})
-const shortage=computed(()=>{const list=differences.value.filter(d=>diff(d)<0);return {count:list.length,total:Math.abs(list.reduce((s,d)=>s+diff(d),0))}})
+// Sobrantes y faltantes del diálogo de confirmación: los suma el backend sobre todo el documento.
+const surplus=computed(()=>data.sobrantes),shortage=computed(()=>data.faltantes)
 const fmt=value=>Number(value||0).toFixed(3).replace(/\.?0+$/,'')||'0'
 const rowValue=row=>Number((diff(row)*Number(row.precio_compra||0)).toFixed(2))
 const rowClass=row=>Math.abs(diff(row))<0.0005?'':diff(row)>0?'row-up':'row-down'
@@ -168,35 +172,59 @@ const columns=[
   {name:'lote',label:'Lote / vencimiento',field:'lote',align:'left'},
   {name:'resultado',label:'Stock resultante',field:'stock_nuevo',align:'right'}
 ]
+const detailParams=extra=>({orden:'nombre',...extra})
 
 async function load(){
   loading.value=true
   try{
     const response=(await proxy.$axios.get(`/almacenes/${id}/avance`)).data
     Object.assign(almacen,response.almacen)
-    Object.assign(data,{...response,detalles:response.detalles||[]})
+    Object.assign(data,response)
   }catch(e){
     proxy.$alert.error(e.response?.data?.message||'No se pudo cargar el avance')
     if(e.response?.status===404)router.replace('/inventario')
   }finally{loading.value=false}
 }
+async function loadRows(silent=false){
+  if(!silent)loadingRows.value=true
+  try{
+    const {page,rowsPerPage}=pagination.value
+    const {data:res}=await proxy.$axios.get(`/almacenes/${id}/detalles`,{params:detailParams({page,per_page:rowsPerPage,q:rowsSearch.value||undefined,solo_diferencias:onlyDifferences.value?1:undefined})})
+    if(res.last_page&&page>res.last_page){pagination.value={...pagination.value,page:res.last_page};return loadRows(silent)}
+    rows.value=res.data||[];pagination.value={...pagination.value,rowsNumber:res.total||0}
+  }catch(e){if(!silent)proxy.$alert.error(e.response?.data?.message||'No se pudo cargar el detalle')}
+  finally{loadingRows.value=false}
+}
+function onRequest(props){pagination.value={...pagination.value,page:props.pagination.page,rowsPerPage:props.pagination.rowsPerPage||25};loadRows()}
+function reloadRows(){pagination.value={...pagination.value,page:1};loadRows()}
+function handleRowsSearch(){clearTimeout(rowsSearchTimer);rowsSearchTimer=setTimeout(reloadRows,300)}
+async function loadConfirm(){
+  loadingConfirm.value=true
+  try{
+    const {data:res}=await proxy.$axios.get(`/almacenes/${id}/detalles`,{params:detailParams({page:confirmPage.value,per_page:50,solo_diferencias:confirmAll.value?undefined:1})})
+    confirmRows.value=res.data||[];confirmLastPage.value=res.last_page||1;confirmTotal.value=res.total||0
+  }catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo cargar las diferencias')}
+  finally{loadingConfirm.value=false}
+}
 // Botón "Actualizar productos": primero se revisan las diferencias en el diálogo.
-function apply(){confirmAll.value=false;confirmDialog.value=true}
+function apply(){confirmAll.value=false;confirmPage.value=1;confirmRows.value=[];confirmDialog.value=true;load();loadConfirm()}
 async function runApply(){
   applying.value=true
   try{
     await proxy.$axios.post(`/almacenes/${id}/aplicar`)
     confirmDialog.value=false
     proxy.$alert.success('Productos actualizados con la revisión')
-    await load()
+    await load();loadRows()
   }catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo actualizar los productos')}
   finally{applying.value=false}
 }
+function refresh(){load();loadRows()}
 onMounted(()=>{
-  load()
-  refreshTimer=setInterval(()=>{if(!document.hidden&&editable.value&&!applying.value)load()},15000)
+  refresh()
+  // Sólo se refrescan los totales y la página visible, no todo el documento.
+  refreshTimer=setInterval(()=>{if(!document.hidden&&editable.value&&!applying.value&&!confirmDialog.value){load();loadRows(true)}},20000)
 })
-onBeforeUnmount(()=>clearInterval(refreshTimer))
+onBeforeUnmount(()=>{clearInterval(refreshTimer);clearTimeout(rowsSearchTimer)})
 </script>
 
 <style scoped>
@@ -211,7 +239,8 @@ onBeforeUnmount(()=>clearInterval(refreshTimer))
 .confirm-kpi__value{font-size:17px;font-weight:800;line-height:21px;color:#263238}
 .confirm-kpi--up .confirm-kpi__value{color:#1b5e20}.confirm-kpi--down .confirm-kpi__value{color:#c62828}
 .confirm-kpi__hint{display:block;font-size:10px;font-weight:500;color:#78909c;line-height:12px}
-.confirm-table{min-height:160px}
+.confirm-table{min-height:160px;position:relative}
+.search-box{width:220px;max-width:45vw}
 .confirm-table tr.row-up td{background:#f4fbf5}.confirm-table tr.row-down td{background:#fff6f6}
 @media(max-width:700px){.confirm-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:900px){.kpi-row{grid-template-columns:repeat(2,minmax(0,1fr))}}

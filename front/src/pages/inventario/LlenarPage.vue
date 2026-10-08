@@ -5,7 +5,7 @@
         <div class="text-subtitle1 text-weight-bold">Revisión {{header.numero}}
           <q-badge :color="stateColor" :label="header.estado==='BORRADOR'?'EN REVISIÓN':header.estado" class="q-ml-xs"/>
         </div>
-        <div class="text-caption text-grey-7">{{header.descripcion||'Cuenta el stock físico de la tienda'}} · {{items.length}} productos revisados</div>
+        <div class="text-caption text-grey-7">{{header.descripcion||'Cuenta el stock físico de la tienda'}} · {{itemsTotal}} productos revisados</div>
       </div>
       <q-space/>
       <q-btn dense flat icon="insights" label="Avance" no-caps class="q-mr-xs" :to="`/inventario/${id}/avance`"/>
@@ -51,9 +51,11 @@
             <q-icon name="fact_check" color="primary" size="22px" class="q-mr-xs"/><b>Productos revisados</b>
             <q-space/>
             <span class="text-caption text-grey-6 q-mr-sm">{{refreshedLabel}}</span>
-            <q-btn dense flat round size="sm" icon="refresh" :loading="refreshing" @click="loadAlmacen()"><q-tooltip>Ver lo que cargaron los demás</q-tooltip></q-btn>
-            <q-badge color="primary" :label="items.length"/>
+            <q-btn dense flat round size="sm" icon="refresh" :loading="refreshing" @click="loadItems()"><q-tooltip>Ver lo que cargaron los demás</q-tooltip></q-btn>
+            <q-badge color="primary" :label="itemsTotal"/>
           </q-card-section>
+          <q-separator/>
+          <q-card-section class="q-pa-sm"><q-input v-model="itemsSearch" dense outlined clearable placeholder="Buscar en lo revisado (producto, código o quién contó)" @update:model-value="handleItemsSearch"><template #prepend><q-icon name="search"/></template></q-input></q-card-section>
           <q-separator/>
           <q-list v-if="items.length" separator class="count-list">
             <q-item v-for="item in items" :key="item.id" dense class="q-px-sm">
@@ -78,8 +80,13 @@
               </q-item-section>
             </q-item>
           </q-list>
-          <q-card-section v-else class="text-center text-grey-6 q-py-xl"><q-icon name="inventory" size="42px"/><div>Todavía no se contó ningún producto</div></q-card-section>
+          <q-card-section v-else class="text-center text-grey-6 q-py-xl"><q-icon name="inventory" size="42px"/><div>{{itemsSearch?'Sin resultados en lo revisado':'Todavía no se contó ningún producto'}}</div></q-card-section>
           <q-separator/>
+          <q-card-actions v-if="itemsLastPage>1" class="row items-center justify-between q-px-sm">
+            <span class="text-caption text-grey-7">{{itemsFrom}}–{{itemsTo}} de {{itemsTotal}}</span>
+            <q-pagination v-model="itemsPage" :max="itemsLastPage" :max-pages="5" boundary-numbers direction-links color="primary" size="sm" @update:model-value="loadItems()"/>
+          </q-card-actions>
+          <q-separator v-if="itemsLastPage>1"/>
           <q-card-actions class="q-pa-sm">
             <q-btn class="full-width" color="primary" unelevated icon="insights" label="Ver avance y actualizar productos" no-caps :to="`/inventario/${id}/avance`"/>
           </q-card-actions>
@@ -135,20 +142,24 @@ const {proxy}=getCurrentInstance(),route=useRoute(),router=useRouter()
 const id=Number(route.params.id)
 const header=reactive({numero:'',estado:'BORRADOR',descripcion:'',observacion:''})
 const items=ref([]),refreshing=ref(false),refreshedAt=ref(null),savingLine=ref(false)
+// Lo revisado viaja paginado: con cientos de productos el documento completo pesaba ~380 KB por consulta.
+const itemsPage=ref(1),itemsLastPage=ref(1),itemsTotal=ref(0),itemsFrom=ref(0),itemsTo=ref(0),itemsSearch=ref(''),itemsPerPage=20
+const countedByProduct=ref({})
 const products=ref([]),categories=ref([]),search=ref(''),category=ref(null),searchInput=ref(null),loadingProducts=ref(false)
 const productsPage=ref(1),productsLastPage=ref(1),productsTotal=ref(0),productsFrom=ref(0),productsTo=ref(0),productsPerPage=18
 const countDialog=ref(false)
 const form=reactive({detalle_id:null,producto_id:null,codigo:'',nombre:'',unidad:'UNIDAD',foto:null,stock_sistema:0,cantidad:0,observacion:'',conteos:[]})
-let productsSearchTimer=null,refreshTimer=null
+let productsSearchTimer=null,itemsSearchTimer=null,refreshTimer=null
 const photoUrl=path=>`${proxy.$imgBase}/images/${path}`
 const qty=(value,unit)=>Number(value||0).toFixed(unit==='KG'?3:0)
 const shortDate=value=>value?new Date(`${String(value).slice(0,10)}T12:00:00`).toLocaleDateString('es-BO'):''
 const editable=computed(()=>header.estado==='BORRADOR')
 const stateColor=computed(()=>header.estado==='APLICADO'?'positive':header.estado==='ANULADO'?'grey-6':'orange')
-const countedIds=computed(()=>new Set(items.value.map(i=>i.producto_id)))
+// Las marcas de "ya contado" de la grilla se piden sólo para los productos de la página visible.
+const countedIds=computed(()=>new Set([...Object.keys(countedByProduct.value).map(Number),...items.value.map(i=>i.producto_id)]))
 const refreshedLabel=computed(()=>refreshedAt.value?`Actualizado ${refreshedAt.value.toLocaleTimeString('es-BO')}`:'')
-// El stock del sistema se lee del producto en vivo; si el producto ya no viene, queda el que se guardó al contar.
-const systemStock=item=>Number(item.producto?.stock_inicial??item.stock_sistema??0)
+// stock_actual lo calcula el backend con el stock vivo del producto (o el guardado al contar si ya no existe).
+const systemStock=item=>Number(item.stock_actual??item.stock_sistema??0)
 const difference=item=>Number((Number(item.cantidad||0)-systemStock(item)).toFixed(3))
 const diffLabel=item=>{const d=difference(item);return `${d>0?'+':''}${d.toFixed(item.unidad==='KG'?3:0)}`}
 const diffColor=item=>{const d=difference(item);return Math.abs(d)<0.0005?'grey-6':d>0?'positive':'negative'}
@@ -159,9 +170,30 @@ async function loadProducts(){
   try{
     const {data}=await proxy.$axios.get('/productos',{params:{q:search.value,categoria_id:category.value?.id,per_page:productsPerPage,page:productsPage.value}})
     products.value=data.data;productsLastPage.value=data.last_page||1;productsTotal.value=data.total||0;productsFrom.value=data.from||0;productsTo.value=data.to||0
+    loadCounted()
   }catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudieron cargar los productos')}
   finally{loadingProducts.value=false}
 }
+async function loadCounted(){
+  const ids=products.value.map(p=>p.id);if(!ids.length){countedByProduct.value={};return}
+  try{
+    const {data}=await proxy.$axios.get(`/almacenes/${id}/detalles`,{params:{producto_ids:ids,per_page:100}})
+    countedByProduct.value=Object.fromEntries((data.data||[]).map(d=>[d.producto_id,d]))
+  }catch(e){/* sólo son las marcas de la grilla */}
+}
+async function loadItems(silent=false){
+  if(!silent)refreshing.value=true
+  try{
+    const {data}=await proxy.$axios.get(`/almacenes/${id}/detalles`,{params:{q:itemsSearch.value||undefined,page:itemsPage.value,per_page:itemsPerPage}})
+    if(data.last_page&&itemsPage.value>data.last_page){itemsPage.value=data.last_page;return loadItems(silent)}
+    items.value=data.data||[];itemsLastPage.value=data.last_page||1;itemsTotal.value=data.total||0;itemsFrom.value=data.from||0;itemsTo.value=data.to||0
+    if(data.estado)header.estado=data.estado
+    refreshedAt.value=new Date()
+  }catch(e){if(!silent)proxy.$alert.error(e.response?.data?.message||'No se pudo cargar lo revisado')}
+  finally{refreshing.value=false}
+}
+function handleItemsSearch(){clearTimeout(itemsSearchTimer);itemsSearchTimer=setTimeout(()=>{itemsPage.value=1;loadItems()},300)}
+function afterChange(){loadItems(true);loadCounted()}
 function resetProductsPage(){productsPage.value=1;loadProducts()}
 function handleSearchInput(){clearTimeout(productsSearchTimer);productsSearchTimer=setTimeout(resetProductsPage,250)}
 function focusSearch(){setTimeout(()=>searchInput.value?.focus(),50)}
@@ -177,7 +209,7 @@ async function openExact(value){
 // Si el producto ya se contó, se recupera tal cual quedó: cantidad, lotes y vencimientos.
 function openCount(product,detail=null){
   if(!editable.value)return
-  const counted=detail||items.value.find(i=>i.producto_id===product.id)
+  const counted=detail||countedByProduct.value[product.id]||items.value.find(i=>i.producto_id===product.id)
   Object.assign(form,{
     detalle_id:counted?.id||null,
     producto_id:counted?.producto_id||product.id,
@@ -216,7 +248,7 @@ async function saveCount(){
     else await proxy.$axios.post(`/almacenes/${id}/detalles`,linePayload())
     proxy.$alert.success(`${form.nombre} registrado`)
     countDialog.value=false
-    await loadAlmacen(true)
+    afterChange()
   }catch(e){
     // 409: otra persona ya contó este producto en esta revisión.
     if(e.response?.status===409)return askReplace(e.response.data.message)
@@ -230,36 +262,34 @@ function askReplace(message){
       await proxy.$axios.post(`/almacenes/${id}/detalles`,linePayload({reemplazar:true}))
       proxy.$alert.success(`${form.nombre} actualizado`)
       countDialog.value=false
-      await loadAlmacen(true)
+      afterChange()
     }catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo guardar el producto')}
     finally{savingLine.value=false}
   })
 }
 function removeItem(item){
   proxy.$alert.dialog(`¿Quitar ${item.nombre} de la revisión?`).onOk(async()=>{
-    try{await proxy.$axios.delete(`/almacenes/${id}/detalles/${item.id}`);proxy.$alert.success('Producto quitado');loadAlmacen(true)}
+    try{await proxy.$axios.delete(`/almacenes/${id}/detalles/${item.id}`);proxy.$alert.success('Producto quitado');afterChange()}
     catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo quitar el producto')}
   })
 }
-async function loadAlmacen(silent=false){
-  if(!silent)refreshing.value=true
+// La cabecera (sin detalle) se pide una sola vez; el estado se sigue actualizando con cada página de loadItems.
+async function loadAlmacen(){
   try{
     const {data}=await proxy.$axios.get(`/almacenes/${id}`)
     Object.assign(header,{numero:data.numero,estado:data.estado,descripcion:data.descripcion||'',observacion:data.observacion||''})
-    items.value=data.detalles||[]
-    refreshedAt.value=new Date()
   }catch(e){
     proxy.$alert.error(e.response?.data?.message||'No se pudo cargar la revisión')
     if(e.response?.status===404)router.replace('/inventario')
-  }finally{refreshing.value=false}
+  }
 }
 onMounted(()=>{
-  loadAlmacen();loadProducts()
+  loadAlmacen();loadItems();loadProducts()
   proxy.$axios.get('/productos-catalogos').then(r=>categories.value=r.data.categorias).catch(()=>{})
-  // Varias personas cargan a la vez: la lista se refresca sola mientras la pestaña está visible.
-  refreshTimer=setInterval(()=>{if(!document.hidden&&!countDialog.value&&editable.value)loadAlmacen(true)},10000)
+  // Varias personas cargan a la vez: la página visible de la lista se refresca sola mientras la pestaña está visible.
+  refreshTimer=setInterval(()=>{if(!document.hidden&&!countDialog.value&&editable.value)loadItems(true)},15000)
 })
-onBeforeUnmount(()=>{clearTimeout(productsSearchTimer);clearInterval(refreshTimer)})
+onBeforeUnmount(()=>{clearTimeout(productsSearchTimer);clearTimeout(itemsSearchTimer);clearInterval(refreshTimer)})
 </script>
 
 <style scoped>

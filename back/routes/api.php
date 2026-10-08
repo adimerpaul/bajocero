@@ -102,6 +102,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/almacenes/{almacen}', [AlmacenController::class, 'show']);
     Route::put('/almacenes/{almacen}', [AlmacenController::class, 'update']);
     Route::get('/almacenes/{almacen}/avance', [AlmacenController::class, 'progress']);
+    Route::get('/almacenes/{almacen}/detalles', [AlmacenController::class, 'detalles']);
     Route::post('/almacenes/{almacen}/detalles', [AlmacenController::class, 'storeDetalle']);
     Route::put('/almacenes/{almacen}/detalles/{detalle}', [AlmacenController::class, 'updateDetalle']);
     Route::delete('/almacenes/{almacen}/detalles/{detalle}', [AlmacenController::class, 'destroyDetalle']);
