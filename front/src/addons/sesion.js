@@ -7,7 +7,6 @@ const AVATAR = 'avatarBajoCero'
 const AVATAR_NAME = 'avatarNombreBajoCero'
 const SYNC = 'meSyncBajoCero'
 const VERSION = 'versionBajoCero'
-const HORAS_REFRESCO = 12
 
 export function sessionToken () {
   return localStorage.getItem(TOKEN)
@@ -51,23 +50,6 @@ export function saveSession (user, token = null) {
 
 export function clearSession () {
   [TOKEN, USER, PERMS, AVATAR, AVATAR_NAME, SYNC, VERSION].forEach(key => localStorage.removeItem(key))
-}
-
-/**
- * /me sólo se consulta cuando falta la sesión guardada, cuando ya pasaron 12 horas
- * desde la última vez o cuando cambió la versión de la app; así la app abre al
- * instante y funciona sin conexión.
- *
- * Lo de la versión importa: los permisos que arman el menú salen de esta copia, y
- * una versión nueva puede traer permisos nuevos (los módulos nuevos no aparecerían
- * hasta 12 horas después o hasta que el usuario volviera a entrar).
- */
-export function shouldRefreshMe () {
-  if (!sessionUser().id) return true
-  if (localStorage.getItem(VERSION) !== String(import.meta.env.VITE_VERSION || '')) return true
-  const last = Number(localStorage.getItem(SYNC) || 0)
-
-  return !last || Date.now() - last > HORAS_REFRESCO * 60 * 60 * 1000
 }
 
 export function cacheAvatar (axiosInstance, user) {

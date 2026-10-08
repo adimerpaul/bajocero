@@ -21,7 +21,7 @@
       <div v-if="editable" class="col-12 col-md-6">
         <q-card flat bordered>
           <q-card-section class="row q-col-gutter-sm q-pa-sm">
-            <q-input ref="searchInput" v-model="search" dense outlined autofocus clearable class="col-12" placeholder="Buscar o escanear producto" @update:model-value="handleSearchInput" @keydown.enter.prevent="openExact($event.target.value)"><template #prepend><q-icon name="qr_code_scanner"/></template></q-input>
+            <q-input ref="searchInput" v-model="search" dense outlined autofocus clearable class="col-12" placeholder="Buscar o escanear producto" @update:model-value="handleSearchInput" @keydown.enter.prevent="openExact($event.target.value)"><template #prepend><q-btn dense flat round icon="qr_code_scanner" color="primary" @click.stop="openScanner"><q-tooltip>Escanear con la cámara</q-tooltip></q-btn></template></q-input>
             <q-select v-model="category" :options="categories" option-label="nombre" dense outlined clearable label="Categoría" class="col-12" @update:model-value="resetProductsPage"/>
           </q-card-section>
           <q-separator/>
@@ -99,9 +99,9 @@
             <div class="col-12 row items-center q-pa-sm rounded-borders bg-blue-grey-1">
               <div><div class="text-caption text-grey-7">Stock del sistema</div><div class="text-h6 text-weight-bold">{{qty(form.stock_sistema,form.unidad)}}</div></div>
               <q-space/>
-              <div class="text-right"><div class="text-caption text-grey-7">Diferencia</div><div class="text-h6 text-weight-bold" :class="formDifference>0?'text-positive':formDifference<0?'text-negative':'text-grey-7'">{{formDifference>0?'+':''}}{{formDifference.toFixed(form.unidad==='KG'?3:0)}}</div></div>
+              <div class="text-right"><div class="text-caption text-grey-7">Diferencia</div><div v-if="quantityEntered" class="text-h6 text-weight-bold" :class="formDifference>0?'text-positive':formDifference<0?'text-negative':'text-grey-7'">{{formDifference>0?'+':''}}{{formDifference.toFixed(form.unidad==='KG'?3:0)}}</div><div v-else class="text-h6 text-weight-bold text-grey-5">—</div></div>
             </div>
-            <q-input v-if="!form.conteos.length" ref="quantityInput" v-model.number="form.cantidad" autofocus outlined dense type="number" min="0" :step="form.unidad==='KG'?0.001:1" label="Cantidad contada *" class="col-12" input-class="text-h5 text-weight-bold" @focus="$event.target.select()"><template #prepend><q-icon name="scale"/></template></q-input>
+            <q-input v-if="!form.conteos.length" ref="quantityInput" v-model.number="form.cantidad" autofocus outlined dense type="number" min="0" :step="form.unidad==='KG'?0.001:1" label="Cantidad contada *" placeholder="¿Cuánto hay en la tienda?" class="col-12" input-class="text-h5 text-weight-bold" @focus="$event.target.select()"><template #prepend><q-icon name="scale"/></template></q-input>
             <div v-else class="col-12 row items-center q-pa-sm rounded-borders bg-orange-1 text-orange-10"><span>Cantidad contada (suma de los lotes)</span><q-space/><b class="text-h6">{{qty(form.cantidad,form.unidad)}}</b></div>
 
             <div class="col-12">
@@ -125,21 +125,37 @@
         </q-form>
       </q-card>
     </q-dialog>
+
+    <q-dialog v-model="scannerDialog" maximized-on-mobile @show="startScanner" @hide="stopScanner">
+      <q-card style="width:480px;max-width:100vw">
+        <q-card-section class="row items-center q-py-sm bg-primary text-white">
+          <q-icon name="qr_code_scanner" size="22px" class="q-mr-sm"/><b>Escanear producto</b>
+          <q-space/>
+          <q-btn flat round dense icon="close" color="white" v-close-popup/>
+        </q-card-section>
+        <q-card-section class="q-pa-sm">
+          <div id="inventario-scanner" class="scanner-box"/>
+          <div v-if="scannerError" class="text-negative text-center q-mt-sm">{{scannerError}}</div>
+          <div v-else class="text-caption text-grey-7 text-center q-mt-sm">Apunta la cámara al código QR o de barras del producto</div>
+        </q-card-section>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
 <script setup>
 import { computed, getCurrentInstance, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { Html5Qrcode } from 'html5-qrcode'
 const {proxy}=getCurrentInstance(),route=useRoute(),router=useRouter()
 const id=Number(route.params.id)
 const header=reactive({numero:'',estado:'BORRADOR',descripcion:'',observacion:''})
 const items=ref([]),refreshing=ref(false),refreshedAt=ref(null),savingLine=ref(false)
 const products=ref([]),categories=ref([]),search=ref(''),category=ref(null),searchInput=ref(null),loadingProducts=ref(false)
 const productsPage=ref(1),productsLastPage=ref(1),productsTotal=ref(0),productsFrom=ref(0),productsTo=ref(0),productsPerPage=18
-const countDialog=ref(false)
+const countDialog=ref(false),scannerDialog=ref(false),scannerError=ref('')
 const form=reactive({detalle_id:null,producto_id:null,codigo:'',nombre:'',unidad:'UNIDAD',foto:null,stock_sistema:0,cantidad:0,observacion:'',conteos:[]})
-let productsSearchTimer=null,refreshTimer=null
+let productsSearchTimer=null,refreshTimer=null,scanner=null,scanHandled=false
 const photoUrl=path=>`${proxy.$imgBase}/images/${path}`
 const qty=(value,unit)=>Number(value||0).toFixed(unit==='KG'?3:0)
 const shortDate=value=>value?new Date(`${String(value).slice(0,10)}T12:00:00`).toLocaleDateString('es-BO'):''
@@ -152,6 +168,7 @@ const systemStock=item=>Number(item.producto?.stock_inicial??item.stock_sistema?
 const difference=item=>Number((Number(item.cantidad||0)-systemStock(item)).toFixed(3))
 const diffLabel=item=>{const d=difference(item);return `${d>0?'+':''}${d.toFixed(item.unidad==='KG'?3:0)}`}
 const diffColor=item=>{const d=difference(item);return Math.abs(d)<0.0005?'grey-6':d>0?'positive':'negative'}
+const quantityEntered=computed(()=>form.cantidad!==null&&form.cantidad!=='')
 const formDifference=computed(()=>Number((Number(form.cantidad||0)-Number(form.stock_sistema||0)).toFixed(3)))
 
 async function loadProducts(){
@@ -186,7 +203,8 @@ function openCount(product,detail=null){
     unidad:counted?.unidad||product.unidad,
     foto:counted?.foto??product?.foto??null,
     stock_sistema:counted?systemStock(counted):Number(product.stock_inicial||0),
-    cantidad:counted?Number(counted.cantidad):Number(product.stock_inicial||0),
+    // Un producto nuevo arranca en blanco: se escribe lo que realmente hay en la tienda.
+    cantidad:counted?Number(counted.cantidad):null,
     observacion:counted?.observacion||'',
     conteos:(counted?.conteos||[]).map(c=>({lote:c.lote||'',fecha_vencimiento:c.fecha_vencimiento?String(c.fecha_vencimiento).slice(0,10):'',cantidad:Number(c.cantidad)}))
   })
@@ -209,7 +227,7 @@ function linePayload(extra={}){
 async function saveCount(){
   syncFormQuantity()
   if(form.conteos.some(l=>!(Number(l.cantidad)>0)))return proxy.$alert.error('Cada lote necesita una cantidad mayor a cero')
-  if(!(Number(form.cantidad)>=0))return proxy.$alert.error('Ingresa la cantidad contada')
+  if(!quantityEntered.value||!(Number(form.cantidad)>=0))return proxy.$alert.error('Ingresa la cantidad contada')
   savingLine.value=true
   try{
     if(form.detalle_id)await proxy.$axios.put(`/almacenes/${id}/detalles/${form.detalle_id}`,linePayload())
@@ -241,6 +259,29 @@ function removeItem(item){
     catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo quitar el producto')}
   })
 }
+function openScanner(){scannerError.value='';scanHandled=false;scannerDialog.value=true}
+// Usa la cámara trasera del celular; al leer un código busca el producto y abre su conteo.
+async function startScanner(){
+  try{
+    scanner=new Html5Qrcode('inventario-scanner')
+    await scanner.start({facingMode:'environment'},{fps:10,qrbox:(w,h)=>{const size=Math.floor(Math.min(w,h)*0.75);return {width:size,height:size}}},
+      async text=>{
+        if(scanHandled)return
+        scanHandled=true
+        if(navigator.vibrate)navigator.vibrate(80)
+        scannerDialog.value=false
+        await openExact(text)
+      },()=>{})
+  }catch(e){
+    scannerError.value=window.isSecureContext?'No se pudo abrir la cámara. Revisa que el navegador tenga permiso para usarla.':'La cámara sólo funciona con https.'
+    scanner=null
+  }
+}
+async function stopScanner(){
+  const current=scanner;scanner=null
+  if(!current)return
+  try{if(current.isScanning)await current.stop();current.clear()}catch(e){}
+}
 async function loadAlmacen(silent=false){
   if(!silent)refreshing.value=true
   try{
@@ -259,7 +300,7 @@ onMounted(()=>{
   // Varias personas cargan a la vez: la lista se refresca sola mientras la pestaña está visible.
   refreshTimer=setInterval(()=>{if(!document.hidden&&!countDialog.value&&editable.value)loadAlmacen(true)},10000)
 })
-onBeforeUnmount(()=>{clearTimeout(productsSearchTimer);clearInterval(refreshTimer)})
+onBeforeUnmount(()=>{clearTimeout(productsSearchTimer);clearInterval(refreshTimer);stopScanner()})
 </script>
 
 <style scoped>
@@ -271,6 +312,7 @@ onBeforeUnmount(()=>{clearTimeout(productsSearchTimer);clearInterval(refreshTime
 .product-name{height:30px;font-size:11px;line-height:15px}.product-meta{font-size:9px;line-height:13px;white-space:nowrap;overflow:hidden}
 .count-list{max-height:calc(100vh - 250px);overflow:auto}.count-thumb{min-width:38px;padding-right:6px}.count-meta{font-size:11px;line-height:14px}
 .count-lots{margin-top:2px;line-height:16px}
+.scanner-box{width:100%;min-height:260px;background:#000;border-radius:6px;overflow:hidden}
 .lot-row{display:flex;align-items:center;gap:4px;margin-bottom:4px}
 .lot-input{height:28px;border:1px solid #cfd8dc;border-radius:4px;padding:2px 6px;font-size:12px;color:#263238;background:#fff;min-width:0;flex:1 1 auto}
 .lot-input.date{flex:0 0 128px}.lot-input.qty{flex:0 0 86px;text-align:right;font-weight:700}
