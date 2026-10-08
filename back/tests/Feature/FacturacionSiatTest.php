@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Mail\FacturaMail;
 use App\Models\Categoria;
 use App\Models\Cliente;
+use App\Models\Lote;
 use App\Models\Producto;
 use App\Models\SiatCufd;
 use App\Models\User;
@@ -85,7 +86,7 @@ class FacturacionSiatTest extends TestCase
 
         $response->assertCreated()->assertJson(['tipo_comprobante' => 'FACTURA', 'numero_factura' => 1, 'estado_siat' => 'VALIDADA', 'tipo_emision' => 1]);
         $this->assertStringContainsString('cuf=', $response->json('factura_url'));
-        $this->assertDatabaseHas('clientes', ['numero_documento' => '5115889', 'complemento' => '1A', 'nombre' => 'JUAN PEREZ']);
+        $this->assertDatabaseHas('clientes', ['numero_documento' => '5115889', 'complemento' => '1A', 'nombre' => 'juan perez']);
 
         $xml = Storage::disk('local')->get(Venta::first()->xml_path);
         $doc = new DOMDocument;
@@ -182,6 +183,35 @@ class FacturacionSiatTest extends TestCase
         $this->assertEqualsWithDelta(50, (float) Producto::find($venta['detalles'][0]['producto_id'])->stock_inicial, 0.001);
     }
 
+    public function test_revertir_la_anulacion_en_impuestos_vuelve_a_descontar_el_stock(): void
+    {
+        $user = $this->cajero();
+        $venta = $this->venta($user)->json();
+        $pollo = $venta['detalles'][0]['producto_id'];
+        $lote = Lote::create(['producto_id' => $pollo, 'cantidad_inicial' => 5, 'cantidad_disponible' => 5]);
+
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/revertir-anulacion")->assertStatus(422); // no está anulada
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/anular", ['codigo_motivo' => 1])->assertOk();
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/revertir-anulacion")
+            ->assertOk()->assertJson(['estado' => 'COMPLETADA', 'estado_siat' => 'VALIDADA']);
+
+        $this->assertSame(1, collect($this->siat->calls)->where('method', 'reversionAnulacionFactura')->count());
+        $this->assertEqualsWithDelta(50 - 1.355, (float) Producto::find($pollo)->stock_inicial, 0.001);
+        $this->assertEqualsWithDelta(5 - 1.355, (float) $lote->fresh()->cantidad_disponible, 0.001);
+    }
+
+    public function test_sin_stock_no_se_revierte_ni_se_llama_a_impuestos(): void
+    {
+        $user = $this->cajero();
+        $venta = $this->venta($user)->json();
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/anular", ['codigo_motivo' => 1])->assertOk();
+        Producto::whereKey($venta['detalles'][0]['producto_id'])->update(['stock_inicial' => 1]);
+
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/revertir-anulacion")->assertStatus(422);
+        $this->assertSame(0, collect($this->siat->calls)->where('method', 'reversionAnulacionFactura')->count());
+        $this->assertSame('ANULADA', Venta::find($venta['id'])->estado_siat);
+    }
+
     public function test_una_venta_offline_de_la_caja_se_factura_con_la_hora_del_cobro(): void
     {
         $user = $this->cajero();
@@ -218,7 +248,18 @@ class FacturacionSiatTest extends TestCase
         $this->assertStringStartsWith('%PDF', $pdf->getContent());
 
         $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/anular", ['codigo_motivo' => 1])->assertOk();
-        Mail::assertSent(FacturaMail::class, fn (FacturaMail $mail) => $mail->anulada && $mail->motivo === 'FACTURA MAL EMITIDA');
+        Mail::assertSent(FacturaMail::class, function (FacturaMail $mail) {
+            $hasXml = collect($mail->attachments())->contains(fn ($a) => str_ends_with($a->as, '.xml'));
+
+            return $mail->anulada && $mail->motivo === 'FACTURA MAL EMITIDA' && $hasXml;
+        });
+
+        $this->actingAs($user)->putJson("/api/ventas/{$venta['id']}/revertir-anulacion")->assertOk();
+        Mail::assertSent(FacturaMail::class, function (FacturaMail $mail) {
+            $hasXml = collect($mail->attachments())->contains(fn ($a) => str_ends_with($a->as, '.xml'));
+
+            return $mail->hasTo('juan@correo.test') && $mail->revertida && ! $mail->anulada && $hasXml;
+        });
     }
 
     public function test_sin_correo_no_se_envia_y_se_puede_mandar_despues(): void
@@ -232,6 +273,29 @@ class FacturacionSiatTest extends TestCase
         $this->actingAs($user)->postJson("/api/ventas/{$venta['id']}/enviar-factura", ['email' => 'otro@correo.test'])->assertOk();
         Mail::assertSent(FacturaMail::class, fn (FacturaMail $mail) => $mail->hasTo('otro@correo.test'));
         $this->assertDatabaseHas('clientes', ['numero_documento' => '5115889', 'email' => 'otro@correo.test']);
+    }
+
+    public function test_enviar_una_sola_factura_por_evento_significativo(): void
+    {
+        $user = $this->cajero();
+        $this->siat->offline = ['recepcionFactura'];
+        $una = $this->venta($user)->assertJson(['estado_siat' => 'PENDIENTE_EVENTO'])->json('id');
+        $otra = $this->venta($user)->json('id');
+
+        $this->siat->offline = [];
+        $this->travel(5)->minutes();
+        $this->actingAs($user)->postJson("/api/ventas/{$una}/enviar-evento")->assertStatus(422); // falta el motivo
+        $this->actingAs($user)->postJson("/api/ventas/{$una}/enviar-evento", ['codigo_motivo' => 1])
+            ->assertOk()->assertJson(['evento' => ['estado' => 'VALIDADO', 'cantidad_facturas' => 1], 'venta' => ['estado_siat' => 'VALIDADA']]);
+
+        // El evento va con un CUFD recién pedido; el de la contingencia queda como cufdEvento.
+        $registro = collect($this->siat->calls)->firstWhere('method', 'registroEventoSignificativo')['payload']['SolicitudEventoSignificativo'];
+        $this->assertSame(Venta::find($una)->cufd, $registro['cufdEvento']);
+        $this->assertNotSame($registro['cufdEvento'], $registro['cufd']);
+        $this->assertSame(SiatCufd::latest('id')->first()->codigo, $registro['cufd']);
+
+        $this->assertSame('PENDIENTE_EVENTO', Venta::find($otra)->estado_siat);
+        $this->actingAs($user)->postJson("/api/ventas/{$una}/enviar-evento", ['codigo_motivo' => 1])->assertStatus(422); // ya validada
     }
 
     public function test_enviar_todo_lo_pendiente_de_una_vez(): void
@@ -275,6 +339,45 @@ class FacturacionSiatTest extends TestCase
         $this->actingAs($user)->postJson('/api/clientes', ['tipo_documento' => 'NIT', 'numero_documento' => '7308976010', 'nombre' => 'empresa 2'])
             ->assertCreated()->assertJson(['id' => $id, 'nombre' => 'EMPRESA 2']);
     }
+
+    public function test_factura_con_excepcion_de_nit_envia_codigo_excepcion_uno_en_el_xml(): void
+    {
+        $user = $this->cajero();
+
+        // 1. Factura con NIT y excepcion = true -> <codigoExcepcion>1</codigoExcepcion>
+        $response = $this->venta($user, [
+            'tipo_documento' => 'NIT',
+            'numero_documento' => '123456789',
+            'cliente_nombre' => 'CLIENTE EXCEPCION',
+            'codigo_excepcion' => true,
+        ]);
+        $response->assertCreated()->assertJson(['estado_siat' => 'VALIDADA']);
+        $ventaConExcepcion = Venta::find($response->json('id'));
+        $this->assertSame(1, (int) $ventaConExcepcion->codigo_excepcion);
+
+        $xml = Storage::disk('local')->get($ventaConExcepcion->xml_path);
+        $this->assertStringContainsString('<codigoExcepcion>1</codigoExcepcion>', $xml);
+        $doc = new DOMDocument;
+        $doc->loadXML($xml);
+        $this->assertTrue($doc->schemaValidate(resource_path('siat/facturaComputarizadaCompraVenta.xsd')));
+
+        // 2. Factura sin excepcion -> <codigoExcepcion xsi:nil="true"/>
+        $responseNormal = $this->venta($user, [
+            'tipo_documento' => 'NIT',
+            'numero_documento' => '987654321',
+            'cliente_nombre' => 'CLIENTE NORMAL',
+            'codigo_excepcion' => false,
+        ]);
+        $responseNormal->assertCreated()->assertJson(['estado_siat' => 'VALIDADA']);
+        $ventaNormal = Venta::find($responseNormal->json('id'));
+        $this->assertNull($ventaNormal->codigo_excepcion);
+
+        $xmlNormal = Storage::disk('local')->get($ventaNormal->xml_path);
+        $this->assertStringContainsString('<codigoExcepcion xsi:nil="true"/>', $xmlNormal);
+        $docNormal = new DOMDocument;
+        $docNormal->loadXML($xmlNormal);
+        $this->assertTrue($docNormal->schemaValidate(resource_path('siat/facturaComputarizadaCompraVenta.xsd')));
+    }
 }
 
 class FakeSiatClient extends SiatClient
@@ -295,7 +398,7 @@ class FakeSiatClient extends SiatClient
 
         return (object) match ($method) {
             'cuis' => ['codigo' => 'CUIS1', 'fechaVigencia' => now()->addYear()->toIso8601String(), 'transaccion' => true],
-            'cufd' => ['codigo' => 'CUFD1', 'codigoControl' => 'CTRL1', 'direccion' => 'CALLE CHARCAS', 'fechaVigencia' => now()->addDay()->toIso8601String(), 'transaccion' => true],
+            'cufd' => ['codigo' => 'CUFD'.count($this->calls), 'codigoControl' => 'CTRL1', 'direccion' => 'CALLE CHARCAS', 'fechaVigencia' => now()->addDay()->toIso8601String(), 'transaccion' => true],
             'recepcionFactura' => $this->rechazar
                 ? ['transaccion' => false, 'codigoEstado' => 902, 'mensajesList' => (object) ['codigo' => 1, 'descripcion' => 'NIT INVALIDO']]
                 : ['transaccion' => true, 'codigoEstado' => 908, 'codigoRecepcion' => 'REC-'.count($this->calls)],

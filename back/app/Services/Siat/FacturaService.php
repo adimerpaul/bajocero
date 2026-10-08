@@ -80,7 +80,6 @@ class FacturaService
             $xml = $this->armar($sale, $cufd, $date, 1);
             $archivo = gzencode($xml, 9);
             try {
-//                XXXXX aca
                 $response = $this->client->call('ServicioFacturacionCompraVenta', 'recepcionFactura', [
                     'SolicitudServicioRecepcionFactura' => $this->solicitudFactura($cuis->codigo, $cufd->codigo, 1) + [
                         'archivo' => $archivo, 'fechaEnvio' => $date->format('Y-m-d\TH:i:s.v'), 'hashArchivo' => hash('sha256', $archivo),
@@ -125,6 +124,23 @@ class FacturaService
         return ['anulada' => $ok, 'mensaje' => $mensaje ?: ($ok ? 'Factura anulada en Impuestos' : 'Impuestos rechazó la anulación')];
     }
 
+    /** Deshace en el SIN la anulación de una factura; vuelve a quedar VALIDADA. */
+    public function revertirAnulacion(Venta $sale): array
+    {
+        abort_unless($sale->cuf && $sale->estado_siat === 'ANULADA', 422, 'Sólo se revierte en Impuestos una factura anulada');
+        [$cuis, $cufd] = $this->siat->credenciales();
+        $response = $this->client->call('ServicioFacturacionCompraVenta', 'reversionAnulacionFactura', [
+            'SolicitudServicioReversionAnulacionFactura' => $this->solicitudFactura($cuis->codigo, $cufd->codigo, 1) + ['cuf' => $sale->cuf],
+        ]);
+        $ok = (bool) ($response->transaccion ?? false);
+        $mensaje = SiatClient::mensaje($response) ?: ($response->codigoDescripcion ?? null);
+        if ($ok) {
+            $sale->update(['estado_siat' => 'VALIDADA', 'siat_mensaje' => null]);
+        }
+
+        return ['revertida' => $ok, 'mensaje' => $mensaje ?: ($ok ? 'Anulación revertida en Impuestos' : 'Impuestos rechazó la reversión')];
+    }
+
     /** Consulta al SIN el estado real de la factura y lo guarda. */
     public function verificar(Venta $sale): array
     {
@@ -159,6 +175,24 @@ class FacturaService
     public function xmlPath(Venta $sale): string
     {
         return "siat/facturas/{$sale->id}.xml";
+    }
+
+    /** Reconstruye el XML oficial de la factura a partir de los datos registrados si no está en disco. */
+    public function reconstruirXml(Venta $sale): string
+    {
+        abort_unless($sale->cuf, 422, 'La venta no tiene CUF');
+        $sale->loadMissing('detalles');
+        $codigos = $this->codigosSin($sale);
+        $leyenda = $sale->leyenda ?: $this->siat->leyenda($codigos->first()['actividad'] ?? config('siat.actividad_economica'));
+        $cufdObj = new SiatCufd(['codigo' => $sale->cufd ?: '0', 'codigo_control' => '0']);
+        $date = Carbon::parse($sale->fecha_emision_siat ?: $sale->fecha ?: now())->setTimezone(config('app.timezone'));
+        $xml = $this->xml($sale, $cufdObj, $sale->cuf, $date, $leyenda, $codigos);
+        Storage::disk('local')->put($this->xmlPath($sale), $xml);
+        if (! $sale->xml_path) {
+            $sale->update(['xml_path' => $this->xmlPath($sale)]);
+        }
+
+        return $xml;
     }
 
     /** Genera CUF + XML, lo valida contra el XSD y lo guarda. Devuelve el XML. */
@@ -246,7 +280,7 @@ class FacturaService
             'montoTotalMoneda' => $this->money($total),
             'montoGiftCard' => null,
             'descuentoAdicional' => $this->money($additionalDiscount),
-            'codigoExcepcion' => $sale->codigo_excepcion ?: null,
+            'codigoExcepcion' => ((int) ($sale->codigo_excepcion ?? 0) === 1) ? 1 : null,
             'cafc' => null,
             'leyenda' => $leyenda,
             'usuario' => mb_substr($sale->usuario?->username ?: ($sale->usuario_nombre ?: 'cajero'), 0, 100),

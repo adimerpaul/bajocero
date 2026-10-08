@@ -13,6 +13,7 @@ use App\Models\Venta;
 use App\Services\Siat\EventoSignificativoService;
 use App\Services\Siat\FacturaCorreoService;
 use App\Services\Siat\FacturaService;
+use App\Services\Siat\SiatService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -286,6 +287,28 @@ class VentaController extends Controller
             'validadas' => Venta::whereIn('siat_evento_id', collect($resultado)->pluck('id'))->where('estado_siat', 'VALIDADA')->count(),
             'restantes' => $this->porEnviar(Venta::query())->count(),
         ]);
+    }
+
+    /** Manda sola, en su propio evento significativo, una factura emitida fuera de línea. */
+    public function enviarEvento(Request $request, Venta $venta, EventoSignificativoService $eventos)
+    {
+        $this->authorizeAction($request, ['Crear Ventas', 'Gestionar Impuestos']);
+        abort_unless($venta->tipo_comprobante === 'FACTURA' && $venta->estado === 'COMPLETADA' && $venta->estado_siat === 'PENDIENTE_EVENTO', 422, 'Sólo se envía por evento significativo una factura emitida sin conexión');
+        $data = $request->validate([
+            'codigo_motivo' => ['required', 'integer', Rule::in(array_keys(EventoSignificativoService::MOTIVOS))],
+            'descripcion' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        try {
+            $evento = $eventos->enviarPendientes((int) $data['codigo_motivo'], $data['descripcion'] ?? null, $request->user()->id, [$venta->id])[0];
+        } catch (HttpException $exception) {
+            throw $exception;
+        } catch (\Throwable $exception) {
+            report($exception);
+            abort(422, 'Impuestos no respondió: '.$exception->getMessage());
+        }
+
+        return response()->json(['evento' => $evento, 'venta' => $venta->fresh()->load('detalles')]);
     }
 
     /** Consulta a Impuestos el estado real de la factura. */
@@ -611,6 +634,61 @@ class VentaController extends Controller
         return response()->json($venta->fresh());
     }
 
+    /**
+     * Revierte en Impuestos la anulación de una factura y deja la venta vigente otra
+     * vez: vuelve a descontar el stock, primero de los mismos lotes y lo que falte por
+     * FIFO. Si ya no hay stock no se toca el SIN, y si el SIN lo rechaza todo se deshace.
+     */
+    public function revertirAnulacion(Request $request, Venta $venta, FacturaService $facturas)
+    {
+        $this->authorizeAction($request, 'Anular Ventas');
+        abort_unless($venta->tipo_comprobante === 'FACTURA' && $venta->estado === 'ANULADA' && $venta->estado_siat === 'ANULADA', 422, 'Sólo se revierte una factura anulada en Impuestos');
+
+        DB::transaction(function () use ($venta, $facturas) {
+            $details = $venta->detalles()->where('descuenta_stock', true)->get();
+            $products = Producto::whereIn('id', $details->pluck('producto_id'))->lockForUpdate()->get()->keyBy('id');
+            foreach ($details->groupBy('producto_id') as $productId => $lines) {
+                $product = $products[$productId] ?? null;
+                abort_unless($product && (float) $product->stock_inicial + 0.0001 >= (float) $lines->sum('cantidad'), 422, 'Stock insuficiente para '.($product->nombre ?? $lines->first()->nombre).': no se puede revertir la anulación');
+            }
+
+            try {
+                $result = $facturas->revertirAnulacion($venta);
+            } catch (\RuntimeException $exception) {
+                abort(422, $exception->getMessage());
+            }
+            abort_unless($result['revertida'], 422, $result['mensaje']);
+
+            foreach ($details as $detail) {
+                $products[$detail->producto_id]->decrement('stock_inicial', $detail->cantidad);
+                $previous = DB::table('venta_detalle_lotes')->where('venta_detalle_id', $detail->id)->pluck('lote_id')->all();
+                DB::table('venta_detalle_lotes')->where('venta_detalle_id', $detail->id)->delete();
+                $lots = Lote::where('producto_id', $detail->producto_id)->where('cantidad_disponible', '>', 0)
+                    ->orderByRaw('CASE WHEN id IN ('.(implode(',', array_map('intval', $previous)) ?: '0').') THEN 0 ELSE 1 END')
+                    ->orderByRaw('fecha_vencimiento IS NULL')->orderBy('fecha_vencimiento')->orderBy('id')->lockForUpdate()->get();
+                $remaining = (float) $detail->cantidad;
+                foreach ($lots as $lot) {
+                    if ($remaining <= 0.0001) {
+                        break;
+                    }
+                    $taken = min($remaining, (float) $lot->cantidad_disponible);
+                    $lot->decrement('cantidad_disponible', $taken);
+                    DB::table('venta_detalle_lotes')->insert([
+                        'venta_detalle_id' => $detail->id, 'lote_id' => $lot->id,
+                        'cantidad' => $taken, 'created_at' => now(), 'updated_at' => now(),
+                    ]);
+                    $remaining = round($remaining - $taken, 3);
+                }
+            }
+            $venta->update(['estado' => 'COMPLETADA']);
+        });
+
+        $id = $venta->id;
+        dispatch(fn () => app(FacturaCorreoService::class)->enviarReversion(Venta::find($id)))->afterResponse();
+
+        return response()->json($venta->fresh());
+    }
+
     private function clientRules(): array
     {
         return [
@@ -637,18 +715,29 @@ class VentaController extends Controller
         }
         $type = $data['tipo_documento'] ?? 'CI';
         $complement = mb_strtoupper(trim((string) ($data['complemento'] ?? '')));
-        $name = mb_strtoupper(trim((string) ($data['cliente_nombre'] ?? ''))) ?: 'S/N';
+        $name = trim((string) ($data['cliente_nombre'] ?? '')) ?: 'S/N';
         $client = Cliente::withTrashed()->firstOrNew(['tipo_documento' => $type, 'numero_documento' => $document, 'complemento' => $complement]);
         $client->fill(['nombre' => $name] + (empty($data['cliente_email']) ? [] : ['email' => $data['cliente_email']]));
         $client->deleted_at = null;
         $client->save();
 
+        $codigoExcepcion = $type === 'NIT' && (! empty($data['codigo_excepcion']) || filter_var($data['codigo_excepcion'] ?? false, FILTER_VALIDATE_BOOLEAN));
+        if (! $codigoExcepcion && $type === 'NIT' && config('siat.enabled') && ctype_digit($document)) {
+            try {
+                $valido = app(SiatService::class)->verificarNit($document);
+                if ($valido === false) {
+                    $codigoExcepcion = true;
+                }
+            } catch (\Throwable) {
+            }
+        }
+
         return [
             'cliente_id' => $client->id, 'tipo_documento' => $type, 'numero_documento' => $document,
             'complemento' => $complement ?: null, 'cliente_nombre' => $name,
             'cliente_email' => $data['cliente_email'] ?? $client->email,
-            // Sólo para NIT: el cliente insiste en un NIT que el padrón del SIN no reconoce.
-            'codigo_excepcion' => $type === 'NIT' && ! empty($data['codigo_excepcion']) ? 1 : null,
+            // Sólo para NIT: si el cliente o el padrón del SIN marcan excepción, se envía código 1 sólo en el XML.
+            'codigo_excepcion' => $codigoExcepcion ? 1 : null,
         ];
     }
 

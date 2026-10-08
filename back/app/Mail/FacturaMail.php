@@ -8,7 +8,7 @@ use Illuminate\Mail\Mailables\Attachment;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 
-/** Factura al cliente: PDF armado en memoria (no se guarda) + XML. Con $anulada es el aviso de anulación. */
+/** Factura al cliente: PDF armado en memoria (no se guarda) + XML. Con $anulada es aviso de anulación, con $revertida es aviso de reversión. */
 class FacturaMail extends Mailable
 {
     public function __construct(
@@ -18,11 +18,19 @@ class FacturaMail extends Mailable
         private ?string $xml,
         public bool $anulada = false,
         public ?string $motivo = null,
+        public bool $revertida = false,
     ) {}
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: "{$this->empresa} - Factura N° {$this->sale->numero_factura}".($this->anulada ? ' ANULADA' : ''));
+        $estado = '';
+        if ($this->revertida) {
+            $estado = ' - ANULACIÓN REVERTIDA';
+        } elseif ($this->anulada) {
+            $estado = ' ANULADA';
+        }
+
+        return new Envelope(subject: "{$this->empresa} - Factura N° {$this->sale->numero_factura}{$estado}");
     }
 
     public function content(): Content
@@ -32,7 +40,13 @@ class FacturaMail extends Mailable
 
     public function attachments(): array
     {
-        $name = "Factura_{$this->sale->numero_factura}".($this->anulada ? '_ANULADA' : '');
+        $suffix = '';
+        if ($this->revertida) {
+            $suffix = '_REVERTIDA';
+        } elseif ($this->anulada) {
+            $suffix = '_ANULADA';
+        }
+        $name = "Factura_{$this->sale->numero_factura}{$suffix}";
         $files = [Attachment::fromData(fn () => $this->pdf, "{$name}.pdf")->withMime('application/pdf')];
         if ($this->xml) {
             $files[] = Attachment::fromData(fn () => $this->xml, "{$name}.xml")->withMime('application/xml');
