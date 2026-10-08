@@ -36,9 +36,8 @@ class FacturaCorreoService
         if (! $email || ! $sale->cuf) {
             return false;
         }
-        $xml = $sale->xml_path && Storage::disk('local')->exists($sale->xml_path) ? Storage::disk('local')->get($sale->xml_path) : null;
 
-        return $this->mandar($sale, $email, new FacturaMail($sale, $this->empresa(), $this->pdf($sale), $xml));
+        return $this->mandar($sale, $email, new FacturaMail($sale, $this->empresa(), $this->pdf($sale), $this->obtenerXml($sale)));
     }
 
     public function enviarAnulacion(Venta $sale, ?string $motivo): bool
@@ -48,7 +47,36 @@ class FacturaCorreoService
             return false;
         }
 
-        return $this->mandar($sale, $email, new FacturaMail($sale, $this->empresa(), $this->pdf($sale), null, true, $motivo));
+        return $this->mandar($sale, $email, new FacturaMail($sale, $this->empresa(), $this->pdf($sale), $this->obtenerXml($sale), true, $motivo));
+    }
+
+    public function enviarReversion(Venta $sale): bool
+    {
+        $email = $sale->cliente_email ?: $sale->cliente?->email;
+        if (! $email || ! $sale->cuf) {
+            return false;
+        }
+
+        return $this->mandar($sale, $email, new FacturaMail($sale, $this->empresa(), $this->pdf($sale), $this->obtenerXml($sale), false, null, true));
+    }
+
+    /** Obtiene el XML oficial de la factura desde disco o lo reconstruye si no estuviera disponible. */
+    public function obtenerXml(Venta $sale): ?string
+    {
+        $path = ltrim($sale->xml_path ?: "siat/facturas/{$sale->id}.xml", '/');
+        if (Storage::disk('local')->exists($path)) {
+            return Storage::disk('local')->get($path);
+        }
+
+        if ($sale->cuf && $sale->numero_factura) {
+            try {
+                return app(FacturaService::class)->reconstruirXml($sale);
+            } catch (\Throwable $exception) {
+                report($exception);
+            }
+        }
+
+        return null;
     }
 
     /** Se manda después de responder: el cajero no espera al servidor de correo. */
@@ -65,7 +93,7 @@ class FacturaCorreoService
         try {
             Mail::to($email)->send($mail);
             $sale->update(['email_enviado_en' => now(), 'email_error' => null]);
-            error_log('[CORREO][FACTURA] Enviado: '.json_encode(['venta_id' => $sale->id, 'destino' => $email, 'anulada' => $mail->anulada], JSON_UNESCAPED_UNICODE));
+            error_log('[CORREO][FACTURA] Enviado: '.json_encode(['venta_id' => $sale->id, 'destino' => $email, 'anulada' => $mail->anulada, 'revertida' => $mail->revertida], JSON_UNESCAPED_UNICODE));
 
             return true;
         } catch (\Throwable $exception) {

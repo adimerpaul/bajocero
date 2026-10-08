@@ -13,6 +13,7 @@ use App\Models\Venta;
 use App\Services\Siat\EventoSignificativoService;
 use App\Services\Siat\FacturaCorreoService;
 use App\Services\Siat\FacturaService;
+use App\Services\Siat\SiatService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -682,6 +683,9 @@ class VentaController extends Controller
             $venta->update(['estado' => 'COMPLETADA']);
         });
 
+        $id = $venta->id;
+        dispatch(fn () => app(FacturaCorreoService::class)->enviarReversion(Venta::find($id)))->afterResponse();
+
         return response()->json($venta->fresh());
     }
 
@@ -717,12 +721,23 @@ class VentaController extends Controller
         $client->deleted_at = null;
         $client->save();
 
+        $codigoExcepcion = $type === 'NIT' && (! empty($data['codigo_excepcion']) || filter_var($data['codigo_excepcion'] ?? false, FILTER_VALIDATE_BOOLEAN));
+        if (! $codigoExcepcion && $type === 'NIT' && config('siat.enabled') && ctype_digit($document)) {
+            try {
+                $valido = app(SiatService::class)->verificarNit($document);
+                if ($valido === false) {
+                    $codigoExcepcion = true;
+                }
+            } catch (\Throwable) {
+            }
+        }
+
         return [
             'cliente_id' => $client->id, 'tipo_documento' => $type, 'numero_documento' => $document,
             'complemento' => $complement ?: null, 'cliente_nombre' => $name,
             'cliente_email' => $data['cliente_email'] ?? $client->email,
-            // Sólo para NIT: el cliente insiste en un NIT que el padrón del SIN no reconoce.
-            'codigo_excepcion' => $type === 'NIT' && ! empty($data['codigo_excepcion']) ? 1 : null,
+            // Sólo para NIT: si el cliente o el padrón del SIN marcan excepción, se envía código 1 sólo en el XML.
+            'codigo_excepcion' => $codigoExcepcion ? 1 : null,
         ];
     }
 

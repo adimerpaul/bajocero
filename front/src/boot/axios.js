@@ -2,7 +2,7 @@ import { defineBoot } from '#q-app/wrappers'
 import axios from 'axios'
 import { Alert } from '../addons/Alert'
 import { cacheCompanyLogo, companyData, saveCompany } from '../addons/empresa'
-import { cacheAvatar, clearSession, saveSession, sessionPermissions, sessionToken, sessionUser, shouldRefreshMe } from '../addons/sesion'
+import { cacheAvatar, clearSession, saveSession, sessionPermissions, sessionToken, sessionUser } from '../addons/sesion'
 import { useCounterStore } from '../stores/example-store'
 
 // Be careful when using SSR for cross-request state pollution
@@ -70,15 +70,14 @@ export default defineBoot(({ app, router }) => {
       store.isLogged = true
     }
 
-    // /me se consulta sólo si no hay sesión guardada o si ya está vieja (12 h).
-    if (shouldRefreshMe()) {
-      app.config.globalProperties.$axios.get('me').then(({ data }) => {
-        store.isLogged = true
-        store.user = data
-        store.permissions = saveSession(data)
-        cacheAvatar(app.config.globalProperties.$axios, data)
-      }).catch(() => { /* sin conexión: se sigue con la sesión guardada */ })
-    }
+    // /me se consulta siempre al abrir: así un permiso recién asignado aparece en el
+    // menú sin volver a entrar. Si no hay conexión se sigue con la sesión guardada.
+    app.config.globalProperties.$axios.get('me').then(({ data }) => {
+      store.isLogged = true
+      store.user = data
+      store.permissions = saveSession(data)
+      cacheAvatar(app.config.globalProperties.$axios, data)
+    }).catch(() => { /* sin conexión: se sigue con la sesión guardada */ })
   }
 
   app.config.globalProperties.$api = api
