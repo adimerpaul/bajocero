@@ -119,8 +119,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/siat/tokens/{token}', [SiatController::class, 'destroyToken']);
     Route::get('/siat/cuis', [SiatController::class, 'cuis']);
     Route::post('/siat/cuis', [SiatController::class, 'generarCuis']);
+    Route::delete('/siat/cuis/{cuis}', [SiatController::class, 'destroyCuis']);
     Route::get('/siat/cufds', [SiatController::class, 'cufds']);
     Route::post('/siat/cufds', [SiatController::class, 'generarCufd']);
+    Route::delete('/siat/cufds/{cufd}', [SiatController::class, 'destroyCufd']);
     Route::post('/siat/sincronizar', [SiatController::class, 'sincronizar']);
     Route::get('/siat/catalogos/{tipo}', [SiatController::class, 'catalogo']);
     Route::get('/siat/categorias', [SiatController::class, 'categorias']);

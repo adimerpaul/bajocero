@@ -79,6 +79,15 @@ class SiatController extends Controller
         return $this->attempt(fn () => $siat->obtenerCuis($request->boolean('forzar')));
     }
 
+    /** Borra un CUIS guardado (p. ej. uno de otro ambiente); el siguiente se pide al SIN. */
+    public function destroyCuis(Request $request, SiatCuis $cuis)
+    {
+        $this->authorizeAccess($request);
+        $cuis->delete();
+
+        return response()->noContent();
+    }
+
     public function cufds(Request $request)
     {
         $this->authorizeAccess($request);
@@ -91,6 +100,15 @@ class SiatController extends Controller
         $this->authorizeAccess($request);
 
         return $this->attempt(fn () => $siat->obtenerCufd($request->boolean('forzar')));
+    }
+
+    /** Borra un CUFD guardado; las facturas ya emitidas conservan su código. */
+    public function destroyCufd(Request $request, SiatCufd $cufd)
+    {
+        $this->authorizeAccess($request);
+        $cufd->delete();
+
+        return response()->noContent();
     }
 
     public function sincronizar(Request $request, SiatService $siat)

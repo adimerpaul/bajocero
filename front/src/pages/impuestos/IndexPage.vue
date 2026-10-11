@@ -11,6 +11,7 @@
 
     <q-tab-panels v-model="tab" animated keep-alive class="bg-transparent">
       <q-tab-panel name="estado" class="q-pa-none">
+        <q-banner v-if="tokenVence&&restanteColor(tokenVence,7*864e5)!=='positive'" dense rounded class="q-mb-sm text-white" :class="restanteColor(tokenVence,7*864e5)==='negative'?'bg-negative':'bg-orange'"><template #avatar><q-icon name="token"/></template>Token del SIAT: <b>{{restante(tokenVence)}}</b> ({{fecha(tokenVence)}}). Registre uno nuevo antes de que venza para seguir facturando.</q-banner>
         <div class="row q-col-gutter-sm">
           <div class="col-12 col-md-4"><q-card flat bordered class="full-height"><q-card-section class="q-pa-sm">
             <div class="text-weight-bold q-mb-xs"><q-icon name="store" color="primary"/> Emisor</div>
@@ -21,23 +22,26 @@
           </q-card-section></q-card></div>
           <div class="col-12 col-md-4"><q-card flat bordered class="full-height"><q-card-section class="q-pa-sm">
             <div class="row items-center q-mb-xs"><div class="text-weight-bold"><q-icon name="key" color="primary"/> CUIS</div><q-space/><q-btn dense unelevated no-caps size="sm" color="primary" icon="add" label="Generar CUIS" :loading="busy==='cuis'" @click="generar('cuis')"/></div>
-            <template v-if="estado.cuis"><div class="text-h6 text-weight-bold">{{estado.cuis.codigo}}</div><div class="text-caption">Vigente hasta {{fecha(estado.cuis.vence_en)}}</div></template>
+            <template v-if="estado.cuis"><div class="row items-center"><div class="text-h6 text-weight-bold">{{estado.cuis.codigo}}</div><q-space/><q-btn dense flat round size="sm" icon="delete" color="negative" @click="borrar('cuis',estado.cuis)"><q-tooltip>Borrar CUIS</q-tooltip></q-btn></div><div class="text-caption">Vigente hasta {{fecha(estado.cuis.vence_en)}}</div><q-badge :color="restanteColor(estado.cuis.vence_en,30*864e5)" :label="restante(estado.cuis.vence_en)"/></template>
             <div v-else class="text-negative text-caption">Sin CUIS vigente: genérelo antes de facturar.</div>
             <div class="text-caption text-grey-7 q-mt-xs">Código de inicio de sistema, dura un año por punto de venta.</div>
           </q-card-section></q-card></div>
           <div class="col-12 col-md-4"><q-card flat bordered class="full-height"><q-card-section class="q-pa-sm">
             <div class="row items-center q-mb-xs"><div class="text-weight-bold"><q-icon name="today" color="primary"/> CUFD</div><q-space/><q-btn dense unelevated no-caps size="sm" color="primary" :icon="estado.cufd?'autorenew':'add'" :label="estado.cufd?'Renovar':'Generar CUFD'" :loading="busy==='cufds'" @click="generar('cufds')"/></div>
-            <template v-if="estado.cufd"><div class="text-caption ellipsis"><b>{{estado.cufd.codigo}}</b></div><div class="text-caption">Control {{estado.cufd.codigo_control}} · vigente hasta <b>{{fecha(estado.cufd.vence_en)}}</b></div><div class="text-caption text-grey-7">{{estado.cufd.direccion}}</div></template>
+            <template v-if="estado.cufd"><div class="row items-center no-wrap"><div class="text-caption ellipsis col"><b>{{estado.cufd.codigo}}</b></div><q-btn dense flat round size="sm" icon="delete" color="negative" @click="borrar('cufds',estado.cufd)"><q-tooltip>Borrar CUFD</q-tooltip></q-btn></div><div class="text-caption">Control {{estado.cufd.codigo_control}} · vigente hasta <b>{{fecha(estado.cufd.vence_en)}}</b></div><q-badge :color="restanteColor(estado.cufd.vence_en,2*36e5)" :label="restante(estado.cufd.vence_en)"/><div class="text-caption text-grey-7">{{estado.cufd.direccion}}</div></template>
             <div v-else class="text-negative text-caption">Sin CUFD vigente: se pide solo al facturar, o genérelo aquí.</div>
             <div class="text-caption text-grey-7 q-mt-xs">Código diario: vence a las 24 h y se renueva solo cada madrugada.</div>
           </q-card-section></q-card></div>
 
           <div class="col-12 col-md-6"><q-card flat bordered><q-card-section class="row items-center q-pa-sm"><div class="text-weight-bold"><q-icon name="token" color="primary"/> Token del SIAT</div><q-space/><q-btn dense flat no-caps color="primary" icon="add" label="Registrar token" @click="tokenDialog=true"/></q-card-section>
-            <q-list dense separator><q-item v-for="t in tokens" :key="t.id"><q-item-section><q-item-label>Token #{{t.id}}</q-item-label><q-item-label caption>Vence {{fecha(t.vence_en)}}</q-item-label></q-item-section><q-item-section side><q-btn dense flat round size="sm" icon="delete" color="negative" @click="deleteToken(t)"/></q-item-section></q-item>
+            <q-list dense separator><q-item v-for="t in tokens" :key="t.id"><q-item-section><q-item-label>Token #{{t.id}}</q-item-label><q-item-label caption>Vence {{fecha(t.vence_en)}}</q-item-label></q-item-section><q-item-section side><q-badge :color="restanteColor(t.vence_en,7*864e5)" :label="restante(t.vence_en)"/></q-item-section><q-item-section side><q-btn dense flat round size="sm" icon="delete" color="negative" @click="deleteToken(t)"/></q-item-section></q-item>
               <q-item v-if="!tokens.length"><q-item-section class="text-caption text-grey-7">No hay token: regístrelo para poder facturar.</q-item-section></q-item></q-list>
           </q-card></div>
           <div class="col-12 col-md-6"><q-card flat bordered><q-card-section class="q-pa-sm text-weight-bold"><q-icon name="history" color="primary"/> Historial de CUFD</q-card-section>
-            <q-table flat dense :rows="cufds" :columns="cufdColumns" row-key="id" hide-pagination :rows-per-page-options="[0]"/>
+            <q-table flat dense :rows="cufds" :columns="cufdColumns" row-key="id" hide-pagination :rows-per-page-options="[0]">
+              <template #body-cell-restante="p"><q-td :props="p"><q-badge :color="restanteColor(p.row.vence_en,2*36e5)" :label="restante(p.row.vence_en)"/></q-td></template>
+              <template #body-cell-actions="p"><q-td :props="p"><q-btn dense flat round size="sm" icon="delete" color="negative" @click="borrar('cufds',p.row)"/></q-td></template>
+            </q-table>
           </q-card></div>
         </div>
       </q-tab-panel>
@@ -81,17 +85,21 @@
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, onMounted, ref } from 'vue'
+import { computed, getCurrentInstance, onBeforeUnmount, onMounted, ref } from 'vue'
 const {proxy}=getCurrentInstance()
 const tab=ref('estado'),estado=ref({}),comunicacion=ref(null),probando=ref(false),busy=ref(null),tokens=ref([]),cufds=ref([]),tokenDialog=ref(false),nuevoToken=ref('')
 const motivos=ref([]),motivo=ref(2),descripcion=ref(''),pendientes=ref([]),eventos=ref([]),enviando=ref(false)
 const categorias=ref([]),catalogoActividades=ref([]),catalogoProductos=ref([]),filtroProducto=ref('')
 const fecha=v=>v?new Date(v).toLocaleString('es-BO'):'—',money=v=>Number(v||0).toFixed(2)
+const ahora=ref(Date.now());let reloj=null
+function restante(v){if(!v)return '—';const ms=new Date(v).getTime()-ahora.value;if(ms<=0)return 'VENCIDO';const m=Math.floor(ms/6e4),d=Math.floor(m/1440),h=Math.floor(m%1440/60),min=m%60;return 'Caduca en '+(d?`${d} d ${h} h`:h?`${h} h ${min} min`:`${min} min`)}
+function restanteColor(v,aviso){const ms=new Date(v).getTime()-ahora.value;return ms<=0?'negative':ms<aviso?'orange':'positive'}
 const err=(e,m)=>proxy.$alert.error(Object.values(e.response?.data?.errors||{})[0]?.[0]||e.response?.data?.message||m)
-const cufdColumns=[{name:'codigo_control',label:'Control',field:'codigo_control',align:'left'},{name:'created_at',label:'Obtenido',field:r=>fecha(r.created_at),align:'left'},{name:'vence_en',label:'Vence',field:r=>fecha(r.vence_en),align:'left'}]
+const cufdColumns=[{name:'codigo_control',label:'Control',field:'codigo_control',align:'left'},{name:'created_at',label:'Obtenido',field:r=>fecha(r.created_at),align:'left'},{name:'vence_en',label:'Vence',field:r=>fecha(r.vence_en),align:'left'},{name:'restante',label:'Restante',field:'vence_en',align:'left'},{name:'actions',label:'',align:'right'}]
 const pendingColumns=[{name:'numero_factura',label:'Factura',field:'numero_factura',align:'left'},{name:'numero',label:'Venta',field:'numero',align:'left'},{name:'fecha',label:'Emitida',field:r=>fecha(r.fecha_emision_siat),align:'left'},{name:'cliente',label:'Cliente',field:'cliente_nombre',align:'left'},{name:'total',label:'Total',field:'total',format:v=>`Bs ${money(v)}`,align:'right'}]
 const eventColumns=[{name:'id',label:'#',field:'id',align:'left'},{name:'motivo',label:'Motivo',field:r=>motivos.value.find(m=>m.codigo===r.codigo_motivo)?.descripcion||r.codigo_motivo,align:'left'},{name:'rango',label:'Periodo',field:r=>`${fecha(r.inicio)} – ${fecha(r.fin)}`,align:'left'},{name:'cantidad_facturas',label:'Facturas',field:'cantidad_facturas',align:'center'},{name:'codigo_evento',label:'Cód. evento',field:'codigo_evento',align:'left'},{name:'estado',label:'Estado',field:'estado',align:'center'},{name:'actions',label:'',align:'right'}]
 const categoryColumns=[{name:'nombre',label:'Categoría',field:'nombre',align:'left'},{name:'productos_count',label:'Productos',field:'productos_count',align:'center'},{name:'actividad_economica',label:'Actividad económica',field:'actividad_economica',align:'left'},{name:'codigo_producto_sin',label:'Producto SIN',field:'codigo_producto_sin',align:'left'}]
+const tokenVence=computed(()=>tokens.value.map(t=>t.vence_en).filter(Boolean).sort().pop()||null)
 const actividades=computed(()=>catalogoActividades.value.map(a=>({codigo:a.codigo,label:`${a.codigo} · ${a.descripcion}`})))
 function productosDe(actividad){const q=filtroProducto.value.toLowerCase();return catalogoProductos.value.filter(p=>p.codigo_actividad===(actividad||'4711100')&&(!q||`${p.codigo} ${p.descripcion}`.toLowerCase().includes(q))).map(p=>({codigo:Number(p.codigo),label:`${p.codigo} · ${p.descripcion}`}))}
 function filtrarProductos(val,update){update(()=>{filtroProducto.value=val||''})}
@@ -105,11 +113,13 @@ function generar(tipo){const run=forzar=>{busy.value=tipo;proxy.$axios.post(`/si
   if(tipo==='cufds'&&estado.value.cufd)return proxy.$alert.dialog('¿Pedir un CUFD nuevo?','El actual sigue vigente; las facturas nuevas usarán el nuevo.').onOk(()=>run(true));run(false)}
 function saveToken(){busy.value='token';proxy.$axios.post('/siat/tokens',{token:nuevoToken.value}).then(()=>{proxy.$alert.success('Token registrado');tokenDialog.value=false;nuevoToken.value='';loadCredenciales()}).catch(e=>err(e,'Token inválido')).finally(()=>busy.value=null)}
 function deleteToken(t){proxy.$alert.dialog(`¿Eliminar el token #${t.id}?`).onOk(()=>proxy.$axios.delete(`/siat/tokens/${t.id}`).then(loadCredenciales))}
+function borrar(tipo,row){const cuis=tipo==='cuis';proxy.$alert.dialog(`¿Borrar el ${cuis?'CUIS':'CUFD'} ${cuis?row.codigo:row.codigo_control}?`,cuis?'Se pedirá uno nuevo a Impuestos al facturar o con «Generar CUIS».':'Las facturas ya emitidas conservan su código; se pedirá otro CUFD al facturar.').onOk(()=>proxy.$axios.delete(`/siat/${tipo}/${row.id}`).then(()=>{proxy.$alert.success(`${cuis?'CUIS':'CUFD'} borrado`);loadEstado();loadCredenciales()}).catch(e=>err(e,'No se pudo borrar')))}
 function enviar(){proxy.$alert.dialog(`¿Enviar ${pendientes.value.length} factura(s) a Impuestos?`,'Se registrará un evento significativo por cada CUFD y se validarán los paquetes. Puede tardar.').onOk(()=>{enviando.value=true;proxy.$axios.post('/siat/eventos',{codigo_motivo:motivo.value,descripcion:descripcion.value},{timeout:600000}).then(r=>{const ev=r.data.eventos||[],ok=ev.filter(e=>e.estado==='VALIDADO').length;if(ok===ev.length)proxy.$alert.success('Facturas enviadas y validadas',`${ev.length} evento(s) validado(s)`);else proxy.$alert.warning('Revise el resultado de los eventos',ev.map(e=>`#${e.id} ${e.estado}: ${e.mensaje||''}`).join(' · '))}).catch(e=>err(e,'No se pudo enviar')).finally(()=>{enviando.value=false;loadEventos();loadEstado()})})}
 function revalidar(ev){proxy.$axios.post(`/siat/eventos/${ev.id}/revalidar`).then(r=>{proxy.$alert.info(`Evento #${ev.id}: ${r.data.estado}`);loadEventos();loadEstado()}).catch(e=>err(e,'No se pudo revalidar'))}
 function guardarCategoria(row){proxy.$axios.put(`/siat/categorias/${row.id}`,{actividad_economica:row.actividad_economica||'4711100',codigo_producto_sin:row.codigo_producto_sin}).then(()=>proxy.$alert.success(`${row.nombre} actualizada`)).catch(e=>err(e,'No se pudo guardar'))}
 function sincronizar(){busy.value='sync';proxy.$axios.post('/siat/sincronizar',{},{timeout:120000}).then(()=>{proxy.$alert.success('Catálogos sincronizados');loadEstado();loadCatalogos()}).catch(e=>err(e,'No se pudo sincronizar')).finally(()=>busy.value=null)}
-onMounted(()=>{loadEstado();loadCredenciales();loadEventos();loadCatalogos()})
+onMounted(()=>{loadEstado();loadCredenciales();loadEventos();loadCatalogos();reloj=setInterval(()=>ahora.value=Date.now(),60000)})
+onBeforeUnmount(()=>clearInterval(reloj))
 </script>
 
 <style scoped>.kv{display:flex;justify-content:space-between;font-size:12px;line-height:20px}.kv span{color:#78909c}</style>
