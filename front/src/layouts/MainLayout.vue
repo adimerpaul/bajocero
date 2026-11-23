@@ -151,6 +151,7 @@ const links = [
   { title: 'Nueva venta offline', icon: 'wifi_off', link: '/ventas/offline/nueva', can: 'Crear Ventas Offline' },
   { title: 'Ventas offline', icon: 'cloud_queue', link: '/ventas/offline', can: 'Crear Ventas Offline' },
   { title: 'Clientes', icon: 'contacts', link: '/clientes', can: 'Ver Clientes' },
+  { title: 'Promociones', icon: 'redeem', link: '/promociones', can: 'Ver Promociones' },
   { title: 'Nueva compra', icon: 'add_business', link: '/compras/nueva', can: 'Crear Compras' },
   { title: 'Compras', icon: 'shopping_bag', link: '/compras', can: 'Ver Compras' },
   { title: 'Proveedores', icon: 'groups', link: '/proveedores', can: 'Ver Compras' },

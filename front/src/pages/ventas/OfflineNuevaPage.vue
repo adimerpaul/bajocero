@@ -97,6 +97,7 @@
 <script setup>
 import { computed, getCurrentInstance, onMounted, ref, watch } from 'vue'
 import { printSale } from '../../addons/ventaPrint'
+import { actualizarPromociones } from '../../addons/promociones'
 import ClienteFactura from '../../components/ClienteFactura.vue'
 import { clienteVacio } from '../../stores/carritos-store'
 import { armarVentaOffline, catalogoOffline, guardarCatalogo, guardarVentaOffline, stockComprometido, ventasPorEnviar } from '../../addons/ventasOffline'
@@ -153,13 +154,14 @@ function confirmSale(){cart.value.forEach(item=>{const requestedTotal=item.total
   try{guardarVentaOffline(venta)}catch(e){return proxy.$alert.error(e.message)}
   reservado.value=stockComprometido();pendientes.value=ventasPorEnviar().length
   proxy.$alert.success(`Venta ${venta.numero_local} guardada en este dispositivo`,'Expórtala a ventas desde "Ventas offline" cuando tengas internet')
-  printSale({...venta,numero:venta.numero_local,estado:'PENDIENTE',pendiente:true})
+  printSale({...venta,numero:venta.numero_local,estado:'PENDIENTE',pendiente:true},{cupones:true})
   cart.value=[];discount.value=0;observation.value='';paymentType.value='EFECTIVO';cliente.value=clienteVacio();searchInput.value?.focus()})}
 
 onMounted(()=>{
   // Con internet se refresca el catálogo solo si nunca se bajó o si ya pasaron 12 h.
   const vencido=!catalogo.value.fecha||Date.now()-catalogo.value.fecha>12*60*60*1000
   if(puedeVender.value&&vencido&&navigator.onLine)descargarCatalogo()
+  if(navigator.onLine)actualizarPromociones(proxy.$axios)
 })
 </script>
 

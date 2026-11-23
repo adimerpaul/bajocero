@@ -426,7 +426,8 @@ class VentaController extends Controller
         if (! $fecha) {
             return null;
         }
-        $moment = Carbon::parse($fecha);
+        // El cliente envía ISO en UTC ("...Z"); se pasa a la zona de la app para no guardar la hora UTC.
+        $moment = Carbon::parse($fecha)->setTimezone(config('app.timezone'));
 
         return $moment->isFuture() || $moment->lt(now()->subDays(30)) ? null : $moment;
     }

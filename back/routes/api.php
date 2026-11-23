@@ -8,6 +8,7 @@ use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\ImagenController;
 use App\Http\Controllers\ProductoController;
 use App\Http\Controllers\ProductoRiesgoController;
+use App\Http\Controllers\PromocionController;
 use App\Http\Controllers\SiatController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\VencimientoController;
@@ -119,6 +120,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/almacenes/{almacen}/aplicar', [AlmacenController::class, 'apply']);
     Route::put('/almacenes/{almacen}/anular', [AlmacenController::class, 'cancel']);
     Route::delete('/almacenes/{almacen}', [AlmacenController::class, 'destroy']);
+
+    Route::get('/promociones', [PromocionController::class, 'index']);
+    Route::get('/promociones-activas', [PromocionController::class, 'activas']);
+    Route::post('/promociones', [PromocionController::class, 'store']);
+    Route::put('/promociones/{promocion}', [PromocionController::class, 'update']);
+    Route::delete('/promociones/{promocion}', [PromocionController::class, 'destroy']);
 
     Route::put('/configuracion', [ConfiguracionController::class, 'update']);
     Route::post('/configuracion/logo', [ConfiguracionController::class, 'uploadLogo']);
