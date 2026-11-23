@@ -7,8 +7,10 @@ use App\Http\Controllers\CompraController;
 use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\ImagenController;
 use App\Http\Controllers\ProductoController;
+use App\Http\Controllers\ProductoRiesgoController;
 use App\Http\Controllers\SiatController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\VencimientoController;
 use App\Http\Controllers\VentaController;
 use Illuminate\Support\Facades\Route;
 
@@ -36,6 +38,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/productos', [ProductoController::class, 'index']);
     Route::get('/productos-catalogos', [ProductoController::class, 'catalogos']);
     Route::get('/productos-exportar/excel', [ProductoController::class, 'exportExcel']);
+    Route::get('/productos-exportar/datos', [ProductoController::class, 'exportData']);
     Route::get('/productos-exportar/pdf', [ProductoController::class, 'exportPdf']);
     Route::get('/productos-plantilla-stock', [ProductoController::class, 'plantillaStock']);
     Route::post('/productos-importar-stock', [ProductoController::class, 'importarStock']);
@@ -86,7 +89,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/compras/{compra}/anular', [CompraController::class, 'cancel']);
     Route::get('/proveedores', [CompraController::class, 'proveedores']);
     Route::post('/proveedores', [CompraController::class, 'storeProveedor']);
-    Route::get('/vencimientos', [CompraController::class, 'vencimientos']);
+    Route::get('/vencimientos', [VencimientoController::class, 'index']);
+    Route::get('/vencimientos-exportar/excel', [VencimientoController::class, 'exportExcel']);
+    Route::put('/vencimientos/{tipo}/{id}/ocultar', [VencimientoController::class, 'toggle'])->whereIn('tipo', ['lote', 'linea'])->whereNumber('id');
+    Route::get('/productos-riesgo', [ProductoRiesgoController::class, 'index']);
+    Route::post('/productos-riesgo', [ProductoRiesgoController::class, 'store']);
+    Route::put('/productos-riesgo/{productoRiesgo}/quitar', [ProductoRiesgoController::class, 'quitar']);
 
     Route::get('/bajas', [BajaController::class, 'index']);
     Route::get('/bajas-resumen', [BajaController::class, 'summary']);
@@ -106,6 +114,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/almacenes/{almacen}/detalles', [AlmacenController::class, 'storeDetalle']);
     Route::put('/almacenes/{almacen}/detalles/{detalle}', [AlmacenController::class, 'updateDetalle']);
     Route::delete('/almacenes/{almacen}/detalles/{detalle}', [AlmacenController::class, 'destroyDetalle']);
+    Route::delete('/almacenes/{almacen}/detalles/{detalle}/usuarios/{conteo}', [AlmacenController::class, 'destroyConteoUsuario']);
+    Route::get('/almacenes/{almacen}/exportar-datos', [AlmacenController::class, 'exportData']);
     Route::post('/almacenes/{almacen}/aplicar', [AlmacenController::class, 'apply']);
     Route::put('/almacenes/{almacen}/anular', [AlmacenController::class, 'cancel']);
     Route::delete('/almacenes/{almacen}', [AlmacenController::class, 'destroy']);

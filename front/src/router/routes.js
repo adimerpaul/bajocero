@@ -26,7 +26,8 @@ const routes = [
       { path: 'clientes', component: () => import('pages/clientes/IndexPage.vue') },
       { path: 'impuestos', component: () => import('pages/impuestos/IndexPage.vue') },
       { path: 'productos/por-vencer', component: () => import('pages/compras/VencimientosPage.vue'), props: { estado: 'por_vencer' } },
-      { path: 'productos/vencidos', component: () => import('pages/compras/VencimientosPage.vue'), props: { estado: 'vencido' } }
+      { path: 'productos/vencidos', component: () => import('pages/compras/VencimientosPage.vue'), props: { estado: 'vencido' } },
+      { path: 'productos/en-riesgo', component: () => import('pages/productos/RiesgoPage.vue') }
     ]
   },
 

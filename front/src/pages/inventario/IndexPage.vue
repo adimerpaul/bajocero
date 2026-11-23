@@ -52,7 +52,8 @@
 <script setup>
 import { getCurrentInstance, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-const {proxy}=getCurrentInstance(),router=useRouter()
+import { useQuasar } from 'quasar'
+const {proxy}=getCurrentInstance(),router=useRouter(),$q=useQuasar()
 const rows=ref([]),loading=ref(false),createDialog=ref(false),creating=ref(false)
 const summary=reactive({en_revision:0,aplicados:0,productos_revisados:0,diferencia_valor:0})
 const filters=reactive({q:'',desde:'',hasta:'',estado:null})
@@ -96,17 +97,24 @@ async function create(){
   }catch(e){proxy.$alert.error(Object.values(e.response?.data?.errors||{})[0]?.[0]||e.response?.data?.message||'No se pudo crear la revisión')}
   finally{creating.value=false}
 }
+// Anular o eliminar pide la contraseña del encargado (la valida el backend, ver config/inventario.php).
+function askPassword(title,message){
+  return $q.dialog({title,message,html:true,persistent:true,
+    prompt:{model:'',type:'password',label:'Contraseña de autorización',outlined:true,dense:true,isValid:v=>!!v},
+    ok:{label:'Autorizar',color:'negative',unelevated:true,noCaps:true},cancel:{label:'Cancelar',flat:true,noCaps:true}})
+}
+const authError=e=>Object.values(e.response?.data?.errors||{})[0]?.[0]||e.response?.data?.message
 function cancel(row){
-  const aviso=row.estado==='APLICADO'?' El stock de cada producto volverá al valor anterior.':''
-  proxy.$alert.dialog(`¿Anular la revisión ${row.numero}?${aviso}`).onOk(async()=>{
-    try{await proxy.$axios.put(`/almacenes/${row.id}/anular`);proxy.$alert.success(`Revisión ${row.numero} anulada`);load()}
-    catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo anular la revisión')}
+  const aviso=row.estado==='APLICADO'?'<br>El stock de cada producto volverá al valor anterior.':''
+  askPassword('Anular revisión',`¿Anular la revisión <b>${row.numero}</b>?${aviso}<br><br>Para confirmar ingrese la contraseña de autorización.`).onOk(async password=>{
+    try{await proxy.$axios.put(`/almacenes/${row.id}/anular`,{password});proxy.$alert.success(`Revisión ${row.numero} anulada`);load()}
+    catch(e){proxy.$alert.error(authError(e)||'No se pudo anular la revisión')}
   })
 }
 function remove(row){
-  proxy.$alert.dialog(`¿Eliminar la revisión ${row.numero}?`).onOk(async()=>{
-    try{await proxy.$axios.delete(`/almacenes/${row.id}`);proxy.$alert.success('Revisión eliminada');load()}
-    catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo eliminar la revisión')}
+  askPassword('Eliminar revisión',`¿Eliminar la revisión <b>${row.numero}</b>?<br><br>Para confirmar ingrese la contraseña de autorización.`).onOk(async password=>{
+    try{await proxy.$axios.delete(`/almacenes/${row.id}`,{data:{password}});proxy.$alert.success('Revisión eliminada');load()}
+    catch(e){proxy.$alert.error(authError(e)||'No se pudo eliminar la revisión')}
   })
 }
 onMounted(load)

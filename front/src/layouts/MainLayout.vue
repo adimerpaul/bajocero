@@ -159,6 +159,7 @@ const links = [
   { title: 'Bajas', icon: 'delete_forever', link: '/bajas', can: 'Ver Bajas' },
   { title: 'Por vencer', icon: 'schedule', link: '/productos/por-vencer', can: 'Ver Compras' },
   { title: 'Vencidos', icon: 'event_busy', link: '/productos/vencidos', can: 'Ver Compras' },
+  { title: 'En riesgo', icon: 'warning_amber', link: '/productos/en-riesgo', can: 'Ver Productos en Riesgo' },
   { title: 'Impuestos', icon: 'account_balance', link: '/impuestos', can: 'Gestionar Impuestos' },
   { title: 'Configuración', icon: 'settings', link: '/configuracion', can: 'Gestionar Configuración' },
 ]

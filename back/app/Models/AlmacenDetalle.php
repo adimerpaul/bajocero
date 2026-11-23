@@ -36,6 +36,12 @@ class AlmacenDetalle extends Model
         return $this->hasMany(AlmacenDetalleConteo::class, 'almacen_detalle_id');
     }
 
+    /** Conteo de cada usuario; `cantidad` de la línea es la suma de todos. */
+    public function usuarios()
+    {
+        return $this->hasMany(AlmacenDetalleUsuario::class, 'almacen_detalle_id')->orderBy('usuario_nombre')->orderBy('id');
+    }
+
     public function producto()
     {
         return $this->belongsTo(Producto::class);

@@ -1,0 +1,1 @@
+import{V as e,b as t,dt as n,tt as r}from"./QBtn-opcb5niz.js";var i=e({name:`QTr`,props:{props:Object,noHover:Boolean},setup(e,{slots:i}){let a=r(()=>`q-tr`+(e.props===void 0||e.props.header?``:` `+e.props.__trClass)+(e.noHover?` q-tr--no-hover`:``));return()=>n(`tr`,{style:e.props?.__trStyle,class:a.value},t(i.default))}});export{i as t};

@@ -9,7 +9,7 @@ class AlmacenDetalleConteo extends Model
 {
     protected $table = 'almacen_detalle_conteos';
 
-    protected $fillable = ['almacen_detalle_id', 'lote', 'fecha_vencimiento', 'cantidad'];
+    protected $fillable = ['almacen_detalle_id', 'almacen_detalle_usuario_id', 'lote', 'fecha_vencimiento', 'cantidad'];
 
     protected $casts = [
         'fecha_vencimiento' => 'date',

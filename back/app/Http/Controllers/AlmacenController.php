@@ -4,16 +4,22 @@ namespace App\Http\Controllers;
 
 use App\Models\Almacen;
 use App\Models\AlmacenDetalle;
+use App\Models\AlmacenDetalleUsuario;
 use App\Models\Lote;
 use App\Models\Producto;
+use App\Models\ProductoRiesgo;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\RateLimiter;
 
 /**
  * Revisión física del stock de la tienda. El documento se llena entre varias
- * personas (cada una carga productos distintos desde su celular) y al aplicarlo
- * el stock del sistema pasa a ser exactamente lo contado, guardando por línea el
- * valor antiguo y el nuevo.
+ * personas desde su celular; si dos cuentan el mismo producto (cada una en un lugar
+ * distinto de la tienda) cada conteo se guarda aparte en `almacen_detalle_usuarios`
+ * y lo contado del producto es la suma. Al aplicarlo el stock del sistema pasa a ser
+ * exactamente ese total, guardando por línea el valor antiguo y el nuevo.
  */
 class AlmacenController extends Controller
 {
@@ -59,7 +65,7 @@ class AlmacenController extends Controller
         $query->select('almacen_detalles.*')
             ->selectRaw("{$system} as stock_actual")
             ->selectRaw("ROUND(almacen_detalles.cantidad - {$system}, 3) as diferencia_actual")
-            ->with('conteos');
+            ->with(['conteos', 'usuarios.conteos']);
 
         if ($search = trim((string) $request->input('q'))) {
             $query->where(fn ($q) => $q->where('almacen_detalles.nombre', 'like', "%{$search}%")
@@ -72,9 +78,13 @@ class AlmacenController extends Controller
         if ($request->boolean('solo_diferencias')) {
             $query->whereRaw("ABS(almacen_detalles.cantidad - {$system}) > 0.0001");
         }
-        $request->input('orden') === 'nombre'
-            ? $query->orderBy('almacen_detalles.nombre')->orderBy('almacen_detalles.id')
-            : $query->orderByDesc('almacen_detalles.id');
+        if ($request->filled('ordenar')) {
+            $this->sortDetails($query, $system, (string) $request->input('ordenar'), $request->input('direccion') === 'desc' ? 'desc' : 'asc');
+        } else {
+            $request->input('orden') === 'nombre'
+                ? $query->orderBy('almacen_detalles.nombre')->orderBy('almacen_detalles.id')
+                : $query->orderByDesc('almacen_detalles.id');
+        }
 
         $page = $query->paginate(min(max((int) $request->input('per_page', 20), 1), 100));
 
@@ -105,10 +115,51 @@ class AlmacenController extends Controller
             'sobrantes' => ['count' => (int) $totals->sobrantes, 'total' => round((float) $totals->sobrante_total, 3)],
             'faltantes' => ['count' => (int) $totals->faltantes, 'total' => round((float) $totals->faltante_total, 3)],
             'diferencia_valor' => round((float) $totals->diferencia_valor, 2),
-            'por_usuario' => $almacen->detalles()->selectRaw('usuario_nombre, COUNT(*) as productos')
-                ->groupBy('usuario_nombre')->orderByDesc('productos')->get()
-                ->map(fn ($row) => ['usuario' => $row->usuario_nombre ?: '—', 'productos' => (int) $row->productos]),
+            'por_usuario' => $this->countsByUser($almacen),
         ]);
+    }
+
+    /**
+     * Excel de avance armado en el navegador por bloques: una fila compacta por producto
+     * con lo que contó cada usuario, para el formato Producto | usuario… | Total | Sistema.
+     */
+    public function exportData(Request $request, Almacen $almacen)
+    {
+        $this->authorizeAction($request, 'Ver Almacenes');
+        $page = max((int) $request->input('page', 1), 1);
+        $size = min(max((int) $request->input('per_page', 2000), 50), 5000);
+        [$query, $system] = $this->detailsQuery($almacen);
+        $query->select('almacen_detalles.*')->selectRaw("{$system} as stock_actual")
+            ->with(['usuarios:id,almacen_detalle_id,user_id,usuario_nombre,cantidad', 'conteos:id,almacen_detalle_id,lote,fecha_vencimiento,cantidad'])
+            ->orderBy('almacen_detalles.nombre')->orderBy('almacen_detalles.id');
+        $total = $page === 1 ? (clone $query)->count() : null;
+
+        $rows = $query->forPage($page, $size)->get()->map(fn ($d) => [
+            $d->codigo, $d->nombre, $d->unidad,
+            $d->usuarios->map(fn ($u) => [$u->user_id, $u->usuario_nombre, (float) $u->cantidad])->values(),
+            (float) $d->cantidad, (float) $d->stock_actual, (float) $d->precio_compra,
+            $d->conteos->map(fn ($c) => trim(($c->lote ?: 'S/L').' '.($c->fecha_vencimiento?->format('d/m/Y') ?? '')).' = '.rtrim(rtrim(number_format((float) $c->cantidad, 3, '.', ''), '0'), '.'))->implode('; '),
+        ]);
+
+        return response()->json([
+            'page' => $page, 'per_page' => $size, 'total' => $total, 'data' => $rows,
+            'usuarios' => $page === 1 ? $this->countsByUser($almacen) : null,
+        ]);
+    }
+
+    /** Cuántos productos contó cada usuario y cuánto sumó, para el avance y las columnas del reporte. */
+    private function countsByUser(Almacen $almacen)
+    {
+        return AlmacenDetalleUsuario::query()
+            ->join('almacen_detalles', 'almacen_detalles.id', '=', 'almacen_detalle_usuarios.almacen_detalle_id')
+            ->where('almacen_detalles.almacen_id', $almacen->id)
+            ->selectRaw('almacen_detalle_usuarios.user_id, MAX(almacen_detalle_usuarios.usuario_nombre) as usuario,
+                COUNT(*) as productos, COALESCE(SUM(almacen_detalle_usuarios.cantidad), 0) as cantidad')
+            ->groupBy('almacen_detalle_usuarios.user_id')->orderByDesc('productos')->get()
+            ->map(fn ($row) => [
+                'user_id' => $row->user_id, 'usuario' => $row->usuario ?: '—',
+                'productos' => (int) $row->productos, 'cantidad' => round((float) $row->cantidad, 3),
+            ]);
     }
 
     public function store(Request $request)
@@ -145,8 +196,9 @@ class AlmacenController extends Controller
     }
 
     /**
-     * Cuenta un producto. Cada línea se guarda sola, así varias personas cargan
-     * productos distintos en el mismo almacén sin pisarse.
+     * Guarda el conteo del usuario que llama. Si otra persona ya contó el producto no se
+     * pisa: cada uno tiene su conteo y lo contado del producto es la suma. Volver a
+     * contar el mismo producto reemplaza sólo el conteo propio.
      */
     public function storeDetalle(Request $request, Almacen $almacen)
     {
@@ -155,25 +207,26 @@ class AlmacenController extends Controller
         $data = $this->validatedLine($request);
 
         $detail = DB::transaction(function () use ($request, $almacen, $data) {
+            // Se bloquea la revisión para que dos celulares no creen a la vez la línea del mismo producto.
+            Almacen::whereKey($almacen->id)->lockForUpdate()->first();
             $product = Producto::findOrFail($data['producto_id']);
-            $existing = $almacen->detalles()->where('producto_id', $product->id)->first();
-            abort_if($existing && ! $request->boolean('reemplazar'), 409,
-                "{$existing?->usuario_nombre} ya contó {$product->nombre} con ".rtrim(rtrim(number_format((float) $existing?->cantidad, 3, '.', ''), '0'), '.'));
-
-            $payload = $this->linePayload($product, $data) + [
-                'user_id' => $request->user()->id,
-                'usuario_nombre' => $request->user()->name,
-            ];
-            $detail = $existing ? tap($existing)->update($payload) : $almacen->detalles()->create($payload);
-            $this->syncConteos($detail, $data);
+            $detail = $almacen->detalles()->where('producto_id', $product->id)->first()
+                ?? $almacen->detalles()->create($this->productSnapshot($product) + ['cantidad' => 0]);
+            $row = $detail->usuarios()->firstOrNew(['user_id' => $request->user()->id]);
+            $this->saveUserCount($detail, $row, $request->user()->name, $data);
+            $this->recalculateLine($detail, $product);
             $this->refreshTotals($almacen);
 
             return $detail;
         });
 
-        return response()->json($detail->fresh()->load('conteos'), 201);
+        return response()->json($detail->fresh()->load(['conteos', 'usuarios.conteos']), 201);
     }
 
+    /**
+     * Corrige un conteo: el de `usuario_conteo_id` si se indica (p. ej. el encargado
+     * arregla lo que cargó otro), si no el del usuario que llama.
+     */
     public function updateDetalle(Request $request, Almacen $almacen, AlmacenDetalle $detalle)
     {
         $this->authorizeAction($request, 'Editar Almacenes');
@@ -181,15 +234,19 @@ class AlmacenController extends Controller
         abort_unless($detalle->almacen_id === $almacen->id, 404);
         $data = $this->validatedLine($request, $detalle);
 
-        DB::transaction(function () use ($almacen, $detalle, $data) {
-            $detalle->update($this->linePayload(Producto::findOrFail($data['producto_id']), $data));
-            $this->syncConteos($detalle, $data);
+        DB::transaction(function () use ($request, $almacen, $detalle, $data) {
+            $row = ($rowId = (int) ($data['usuario_conteo_id'] ?? 0))
+                ? $detalle->usuarios()->whereKey($rowId)->firstOrFail()
+                : $detalle->usuarios()->firstOrNew(['user_id' => $request->user()->id]);
+            $this->saveUserCount($detalle, $row, $row->exists ? $row->usuario_nombre : $request->user()->name, $data);
+            $this->recalculateLine($detalle, Producto::find($detalle->producto_id));
             $this->refreshTotals($almacen);
         });
 
-        return response()->json($detalle->fresh()->load('conteos'));
+        return response()->json($detalle->fresh()->load(['conteos', 'usuarios.conteos']));
     }
 
+    /** Quita el producto completo de la revisión, con los conteos de todos. */
     public function destroyDetalle(Request $request, Almacen $almacen, AlmacenDetalle $detalle)
     {
         $this->authorizeAction($request, 'Editar Almacenes');
@@ -204,6 +261,24 @@ class AlmacenController extends Controller
         return response()->json(['message' => 'Producto quitado de la revisión']);
     }
 
+    /** Quita sólo el conteo de un usuario; si era el único, el producto sale de la revisión. */
+    public function destroyConteoUsuario(Request $request, Almacen $almacen, AlmacenDetalle $detalle, AlmacenDetalleUsuario $conteo)
+    {
+        $this->authorizeAction($request, 'Editar Almacenes');
+        abort_unless($almacen->editable(), 422, 'Este almacén ya fue aplicado o anulado');
+        abort_unless($detalle->almacen_id === $almacen->id && $conteo->almacen_detalle_id === $detalle->id, 404);
+
+        DB::transaction(function () use ($almacen, $detalle, $conteo) {
+            $conteo->delete();
+            $detalle->usuarios()->exists()
+                ? $this->recalculateLine($detalle, Producto::find($detalle->producto_id))
+                : $detalle->delete();
+            $this->refreshTotals($almacen);
+        });
+
+        return response()->json(['message' => "Conteo de {$conteo->usuario_nombre} quitado"]);
+    }
+
     /**
      * Botón "Actualizar productos": el stock de cada producto contado pasa a ser
      * la cantidad de la revisión. Los productos que nadie contó no se tocan.
@@ -214,7 +289,7 @@ class AlmacenController extends Controller
         abort_unless($almacen->estado === 'BORRADOR', 422, 'Este almacén ya fue aplicado o anulado');
         abort_if($almacen->detalles()->count() === 0, 422, 'Cuente al menos un producto antes de actualizar el inventario');
 
-        DB::transaction(function () use ($request, $almacen) {
+        $atRisk = DB::transaction(function () use ($request, $almacen) {
             foreach ($almacen->detalles as $detail) {
                 $product = Producto::lockForUpdate()->find($detail->producto_id);
                 abort_unless($product, 422, "El producto {$detail->nombre} ya no existe; quítelo de la revisión");
@@ -226,7 +301,9 @@ class AlmacenController extends Controller
 
                 if ($countedLots->isNotEmpty()) {
                     // Se contaron los lotes uno por uno: eso es la verdad, se reemplazan los del sistema.
-                    $this->replaceLots($detail, $product, $countedLots);
+                    // Lo que otro usuario contó sin lote entra como un lote más, sin vencimiento.
+                    $loose = round($counted - (float) $countedLots->sum(fn ($lot) => (float) $lot->cantidad), 3);
+                    $this->replaceLots($detail, $product, $countedLots, max($loose, 0));
                 } elseif ($difference > 0.0001) {
                     Lote::create([
                         'producto_id' => $product->id,
@@ -256,9 +333,12 @@ class AlmacenController extends Controller
                 'aplicado_por_nombre' => $request->user()->name,
             ]);
             $this->refreshTotals($almacen);
+
+            // Todo lo contado con fecha de vencimiento entra solo a "Productos en riesgo".
+            return ProductoRiesgo::registrarDesdeInventario($almacen->fresh(), $request->user());
         });
 
-        return response()->json($this->withDetails($almacen->fresh()));
+        return response()->json($this->withDetails($almacen->fresh())->setAttribute('riesgo_agregados', $atRisk));
     }
 
     /** Anula: si ya estaba aplicado deshace el ajuste de cada producto. */
@@ -266,8 +346,9 @@ class AlmacenController extends Controller
     {
         $this->authorizeAction($request, 'Anular Almacenes');
         abort_if($almacen->estado === 'ANULADO', 422, 'El almacén ya está anulado');
+        $autoriza = $this->authorizeWithPassword($request);
 
-        DB::transaction(function () use ($almacen) {
+        DB::transaction(function () use ($request, $almacen, $autoriza) {
             if ($almacen->estado === 'APLICADO') {
                 foreach ($almacen->detalles as $detail) {
                     $difference = round((float) $detail->diferencia, 3);
@@ -294,7 +375,11 @@ class AlmacenController extends Controller
                 }
             }
 
-            $almacen->update(['estado' => 'ANULADO']);
+            $nota = 'ANULADO POR '.$request->user()->name.' · AUTORIZÓ '.$autoriza->name.' · '.now()->format('d/m/Y H:i');
+            $almacen->update([
+                'estado' => 'ANULADO',
+                'observacion' => trim(($almacen->observacion ? $almacen->observacion."\n" : '').$nota),
+            ]);
         });
 
         return response()->json($this->withDetails($almacen->fresh()));
@@ -304,6 +389,7 @@ class AlmacenController extends Controller
     {
         $this->authorizeAction($request, 'Anular Almacenes');
         abort_unless($almacen->editable(), 422, 'Sólo se puede eliminar un almacén en revisión');
+        $this->authorizeWithPassword($request);
         $almacen->delete();
 
         return response()->json(['message' => 'Almacén eliminado']);
@@ -315,7 +401,7 @@ class AlmacenController extends Controller
      * cada lote contado. Los lotes viejos no se borran para no perder el historial
      * de ventas que los referencia.
      */
-    private function replaceLots(AlmacenDetalle $detail, Producto $product, $countedLots): void
+    private function replaceLots(AlmacenDetalle $detail, Producto $product, $countedLots, float $loose = 0): void
     {
         $current = Lote::where('producto_id', $product->id)->where('cantidad_disponible', '>', 0)
             ->lockForUpdate()->get();
@@ -336,6 +422,14 @@ class AlmacenController extends Controller
                 'fecha_vencimiento' => $countedLot->fecha_vencimiento,
                 'cantidad_inicial' => $countedLot->cantidad,
                 'cantidad_disponible' => $countedLot->cantidad,
+            ]);
+        }
+        if ($loose > 0.0001) {
+            Lote::create([
+                'producto_id' => $product->id,
+                'almacen_detalle_id' => $detail->id,
+                'cantidad_inicial' => $loose,
+                'cantidad_disponible' => $loose,
             ]);
         }
     }
@@ -370,6 +464,7 @@ class AlmacenController extends Controller
             'lote' => ['nullable', 'string', 'max:100'],
             'fecha_vencimiento' => ['nullable', 'date'],
             'observacion' => ['nullable', 'string', 'max:255'],
+            'usuario_conteo_id' => ['nullable', 'integer'],
             'conteos' => ['nullable', 'array'],
             'conteos.*.lote' => ['nullable', 'string', 'max:100'],
             'conteos.*.fecha_vencimiento' => ['nullable', 'date'],
@@ -390,38 +485,70 @@ class AlmacenController extends Controller
             : round(array_sum(array_map(fn ($lot) => (float) $lot['cantidad'], $lots)), 3);
     }
 
-    private function linePayload(Producto $product, array $data): array
+    /** Datos del producto que se copian a la línea, para que el documento no cambie si luego se edita el producto. */
+    private function productSnapshot(?Producto $product): array
     {
-        $counted = $this->countedQuantity($data);
-        $lots = $data['conteos'] ?? [];
-
-        return [
+        return $product ? [
             'producto_id' => $product->id,
             'codigo' => $product->codigo,
             'nombre' => $product->nombre,
             'unidad' => $product->unidad,
             'foto' => $product->foto,
             'stock_sistema' => round((float) $product->stock_inicial, 3),
-            'cantidad' => $counted,
-            // Con un solo lote se copia a la cabecera de la línea para poder mostrarla sin abrir el detalle.
-            'lote' => count($lots) === 1 ? ($lots[0]['lote'] ?? null) : ($lots === [] ? ($data['lote'] ?? null) : null),
-            'fecha_vencimiento' => count($lots) === 1 ? ($lots[0]['fecha_vencimiento'] ?? null) : ($lots === [] ? ($data['fecha_vencimiento'] ?? null) : null),
             'precio_compra' => $product->precio_compra,
-            'total' => round($counted * (float) $product->precio_compra, 2),
-            'observacion' => $data['observacion'] ?? null,
-        ];
+        ] : [];
     }
 
-    private function syncConteos(AlmacenDetalle $detalle, array $data): void
+    /**
+     * Guarda el conteo de un usuario con sus lotes. Un lote/vencimiento enviado sin
+     * `conteos` se toma como un único lote con toda la cantidad.
+     */
+    private function saveUserCount(AlmacenDetalle $detail, AlmacenDetalleUsuario $row, string $name, array $data): void
     {
-        $detalle->conteos()->delete();
-        foreach ($data['conteos'] ?? [] as $lot) {
-            $detalle->conteos()->create([
+        $lots = $data['conteos'] ?? [];
+        if ($lots === [] && (($data['lote'] ?? null) || ($data['fecha_vencimiento'] ?? null)) && (float) ($data['cantidad'] ?? 0) > 0) {
+            $lots = [['lote' => $data['lote'] ?? null, 'fecha_vencimiento' => $data['fecha_vencimiento'] ?? null, 'cantidad' => $data['cantidad']]];
+        }
+
+        $row->fill([
+            'usuario_nombre' => $name,
+            'cantidad' => $this->countedQuantity(['cantidad' => $data['cantidad'] ?? 0, 'conteos' => $lots]),
+            'observacion' => $data['observacion'] ?? null,
+        ])->save();
+
+        $row->conteos()->delete();
+        foreach ($lots as $lot) {
+            $row->conteos()->create([
+                'almacen_detalle_id' => $detail->id,
                 'lote' => $lot['lote'] ?? null,
                 'fecha_vencimiento' => $lot['fecha_vencimiento'] ?? null,
                 'cantidad' => round((float) $lot['cantidad'], 3),
             ]);
         }
+    }
+
+    /**
+     * La línea del producto es la suma de los conteos de todos los usuarios. Con un solo
+     * lote en total se copia a la cabecera de la línea para mostrarlo sin abrir el detalle.
+     */
+    private function recalculateLine(AlmacenDetalle $detail, ?Producto $product): void
+    {
+        $rows = $detail->usuarios()->get();
+        $lots = $detail->conteos()->get();
+        $counted = round((float) $rows->sum(fn ($row) => (float) $row->cantidad), 3);
+        $latest = $rows->sortByDesc('updated_at')->first();
+        $snapshot = $this->productSnapshot($product);
+        $price = (float) ($snapshot['precio_compra'] ?? $detail->precio_compra);
+
+        $detail->update($snapshot + [
+            'cantidad' => $counted,
+            'user_id' => $latest?->user_id,
+            'usuario_nombre' => mb_substr($rows->pluck('usuario_nombre')->unique()->implode(', '), 0, 255) ?: null,
+            'lote' => $lots->count() === 1 ? $lots->first()->lote : null,
+            'fecha_vencimiento' => $lots->count() === 1 ? $lots->first()->fecha_vencimiento : null,
+            'total' => round($counted * $price, 2),
+            'observacion' => mb_substr($rows->pluck('observacion')->filter()->implode(' · '), 0, 255) ?: null,
+        ]);
     }
 
     private function refreshTotals(Almacen $almacen): void
@@ -444,6 +571,40 @@ class AlmacenController extends Controller
      * aplicar, o contra el stock vivo del producto mientras está en revisión (si el
      * producto se eliminó, el que se guardó al contar).
      */
+    /**
+     * Orden por columna de la tabla de avance, de menor a mayor o de mayor a menor (como en Excel).
+     * `user_u{id}` / `user_n{nombre}` ordena por lo que contó esa persona; los vacíos van siempre al final.
+     */
+    private function sortDetails($query, string $system, string $column, string $direction): void
+    {
+        $expression = match ($column) {
+            'producto' => 'almacen_detalles.nombre',
+            'contado' => 'almacen_detalles.cantidad',
+            'sistema' => $system,
+            'diferencia' => "ROUND(almacen_detalles.cantidad - {$system}, 3)",
+            'lote' => 'COALESCE((SELECT MIN(c.fecha_vencimiento) FROM almacen_detalle_conteos c WHERE c.almacen_detalle_id = almacen_detalles.id), almacen_detalles.fecha_vencimiento)',
+            'resultado' => 'COALESCE(almacen_detalles.stock_nuevo, almacen_detalles.cantidad)',
+            default => null,
+        };
+        $bindings = [];
+        if ($expression === null && preg_match('/^user_u(\d+)$/', $column, $m)) {
+            $expression = '(SELECT SUM(du.cantidad) FROM almacen_detalle_usuarios du WHERE du.almacen_detalle_id = almacen_detalles.id AND du.user_id = ?)';
+            $bindings = [(int) $m[1]];
+        } elseif ($expression === null && str_starts_with($column, 'user_n')) {
+            $expression = '(SELECT SUM(du.cantidad) FROM almacen_detalle_usuarios du WHERE du.almacen_detalle_id = almacen_detalles.id AND du.user_id IS NULL AND du.usuario_nombre = ?)';
+            $bindings = [substr($column, 6)];
+        }
+        if ($expression === null) {
+            $query->orderBy('almacen_detalles.nombre')->orderBy('almacen_detalles.id');
+
+            return;
+        }
+
+        $query->orderByRaw("({$expression}) IS NULL", $bindings)
+            ->orderByRaw("{$expression} {$direction}", $bindings)
+            ->orderBy('almacen_detalles.nombre')->orderBy('almacen_detalles.id');
+    }
+
     private function detailsQuery(Almacen $almacen): array
     {
         $system = $almacen->estado === 'APLICADO'
@@ -476,6 +637,29 @@ class AlmacenController extends Controller
         }
 
         return $query;
+    }
+
+    /**
+     * Anular o eliminar una revisión necesita la contraseña del usuario configurado en
+     * config/inventario.php (el encargado), aunque quien lo pida tenga el permiso.
+     * Tras 5 intentos fallidos se bloquea un minuto para no poder adivinarla.
+     */
+    private function authorizeWithPassword(Request $request): User
+    {
+        $request->validate(['password' => ['required', 'string']], ['password.required' => 'Ingrese la contraseña de autorización']);
+        $key = 'inventario-anular:'.$request->user()->id;
+        abort_if(RateLimiter::tooManyAttempts($key, 5), 429,
+            'Demasiados intentos. Espere '.RateLimiter::availableIn($key).' segundos.');
+
+        $autoriza = User::where('username', config('inventario.autoriza_anulacion'))->first();
+        abort_unless($autoriza, 422, 'No existe el usuario que autoriza las anulaciones de inventario');
+        if (! Hash::check((string) $request->input('password'), $autoriza->password)) {
+            RateLimiter::hit($key, 60);
+            abort(422, 'Contraseña de autorización incorrecta');
+        }
+        RateLimiter::clear($key);
+
+        return $autoriza;
     }
 
     private function authorizeAction(Request $request, string $permission): void

@@ -8,7 +8,7 @@
       <q-space />
       <q-btn-dropdown dense flat color="primary" icon="download" label="Exportar" no-caps class="q-mr-xs" :loading="exporting">
         <q-list dense>
-          <q-item clickable v-close-popup @click="download('excel')"><q-item-section avatar><q-icon name="table_view" color="positive"/></q-item-section><q-item-section>Excel</q-item-section></q-item>
+          <q-item clickable v-close-popup @click="downloadExcel"><q-item-section avatar><q-icon name="table_view" color="positive"/></q-item-section><q-item-section>Excel</q-item-section></q-item>
           <q-item clickable v-close-popup @click="download('pdf')"><q-item-section avatar><q-icon name="picture_as_pdf" color="negative"/></q-item-section><q-item-section>PDF</q-item-section></q-item>
         </q-list>
       </q-btn-dropdown>
@@ -266,11 +266,15 @@
         <q-inner-loading :showing="auditLoading"><q-spinner color="primary" size="32px"/></q-inner-loading>
       </q-card>
     </q-dialog>
+    <ExportProgressDialog :state="xls" @cancel="xlsExport.cancel" />
   </q-page>
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, onMounted, reactive, ref } from 'vue'
+import { computed, getCurrentInstance, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { companyData } from 'src/addons/empresa'
+import { createExportState, exportErrorMessage, fetchInBlocks } from 'src/addons/exportProgress'
+import ExportProgressDialog from 'components/ExportProgressDialog.vue'
 const { proxy } = getCurrentInstance()
 const rows = ref([]), loading = ref(false), saving = ref(false), dialog = ref(false), exporting = ref(false)
 const categoriesDialog = ref(false)
@@ -364,6 +368,42 @@ async function download (type) {
   } catch { proxy.$alert.error('No se pudo exportar el reporte') }
   finally { exporting.value = false }
 }
+// Excel por partes: con 100 000 productos el servidor no puede armar el archivo de una vez,
+// así que se baja en bloques (ver addons/exportProgress.js) y el libro se arma aquí.
+const xlsExport = createExportState('Exportando productos a Excel'), xls = xlsExport.state
+function filterDescription () {
+  const parts = []
+  if (search.value) parts.push(`Búsqueda "${search.value}"`)
+  if (category.value) parts.push(`Categoría ${category.value.nombre}`)
+  if (unit.value) parts.push(`Unidad ${unit.value}`)
+  if (stockFilter.value) parts.push(stockOptions.find(o => o.value === stockFilter.value)?.label)
+  const orden = sortOptions.find(o => o.value === pagination.value.sortBy)?.label || pagination.value.sortBy
+  return `${parts.length ? parts.join(' · ') : 'Todos los productos'}  ·  Orden: ${orden} (${pagination.value.descending ? 'descendente' : 'ascendente'})`
+}
+async function downloadExcel () {
+  const signal = xlsExport.start(5000)
+  try {
+    const params = { ...filterParams(), sort_by:pagination.value.sortBy, sort_dir:pagination.value.descending ? 'desc' : 'asc' }
+    const { rows } = await fetchInBlocks(proxy.$axios, '/productos-exportar/datos', params, { state:xls, signal, size:5000 })
+    const [{ buildProductosExcel }, { saveBlob, fileStamp }] = await Promise.all([import('src/addons/productosExcel'), import('src/addons/xlsx')])
+    const company = companyData(), now = new Date()
+    const blob = await buildProductosExcel(rows, {
+      empresa:(company.nombre_empresa || 'Bajo Cero').toUpperCase(),
+      datos:[company.nit && `NIT ${company.nit}`, company.direccion, company.telefono && `Tel. ${company.telefono}`].filter(Boolean).join('  ·  '),
+      filtros:filterDescription(),
+      usuario:proxy.$store.user?.name || proxy.$store.user?.username || '-',
+      fecha:now.toLocaleString('es-BO'),
+      total:rows.length
+    }, { signal, onProgress:n => { xls.generados = n } })
+    saveBlob(blob, `productos_${fileStamp(now)}.xlsx`)
+    xls.fase = 'listo'
+    proxy.$alert.success(`Excel generado con ${rows.length.toLocaleString('es-BO')} productos`)
+  } catch (e) {
+    if (signal.aborted) { xls.open = false; proxy.$alert.info('Exportación cancelada') }
+    else xls.error = exportErrorMessage(e)
+  } finally { xlsExport.stop() }
+}
+onBeforeUnmount(() => xlsExport.dispose())
 // Muestra la cantidad exacta: 3 decimales como máximo, sin ceros de relleno.
 // No se redondea por unidad porque el stock puede tener decimales aunque el producto sea PZS.
 const qty = value => {

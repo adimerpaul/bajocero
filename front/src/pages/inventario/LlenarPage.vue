@@ -22,25 +22,36 @@
         <q-card flat bordered>
           <q-card-section class="row q-col-gutter-sm q-pa-sm">
             <q-input ref="searchInput" v-model="search" dense outlined autofocus clearable class="col-12" placeholder="Buscar o escanear producto" @update:model-value="handleSearchInput" @keydown.enter.prevent="openExact($event.target.value)"><template #prepend><q-btn dense flat round icon="qr_code_scanner" color="primary" @click.stop="openScanner"><q-tooltip>Escanear con la cámara</q-tooltip></q-btn></template></q-input>
-            <q-select v-model="category" :options="categories" option-label="nombre" dense outlined clearable label="Categoría" class="col-12" @update:model-value="resetProductsPage"/>
+            <q-select v-model="category" :options="categories" option-label="nombre" dense outlined clearable label="Categoría" class="col-12 col-sm-6" @update:model-value="resetProductsPage"/>
+            <q-select v-model="sortOrder" :options="sortOptions" emit-value map-options dense outlined label="Ordenar por" class="col-12 col-sm-6" @update:model-value="changeSort"><template #prepend><q-icon name="sort" size="18px"/></template></q-select>
           </q-card-section>
           <q-separator/>
           <q-card-section v-if="loadingProducts" class="flex flex-center product-loading"><q-spinner color="primary" size="38px"/></q-card-section>
           <q-card-section v-else-if="!products.length" class="text-center text-grey-6 q-py-xl"><q-icon name="search_off" size="42px"/><div>Sin productos para esta búsqueda</div></q-card-section>
-          <q-card-section v-else class="q-pa-sm product-grid">
-            <q-card v-for="product in products" :key="product.id" flat bordered class="product-card cursor-pointer" :class="{'product-card--done':countedIds.has(product.id)}" @click="openCount(product)">
-              <div class="product-image"><img v-if="product.foto" :src="photoUrl(product.foto)"/><q-icon v-else name="inventory_2" size="30px" color="grey-4"/><q-icon v-if="countedIds.has(product.id)" name="task_alt" color="positive" size="18px" class="done-mark"/></div>
-              <q-card-section class="q-pa-xs">
-                <div class="text-weight-bold ellipsis-2-lines product-name">{{product.nombre}}</div>
-                <div class="product-meta text-grey-7">{{product.codigo}} · {{product.unidad}}</div>
-                <div class="product-meta">Sistema: <b>{{qty(product.stock_inicial,product.unidad)}}</b></div>
-              </q-card-section>
-            </q-card>
-          </q-card-section>
+          <div v-else class="product-grid">
+            <table class="product-table">
+              <thead><tr><th class="c-img"/><th v-for="col in sortColumns" :key="col.field" :class="[col.cls,'th-sort',{'th-active':sortField===col.field}]" @click="sortByColumn(col.field)">{{col.label}}<q-icon :name="sortField===col.field?(sortDir==='desc'?'arrow_downward':'arrow_upward'):'unfold_more'" size="12px" class="q-ml-xs"/></th><th class="c-stock">Contado</th><th class="c-stock">Dif.</th><th class="c-done"/></tr></thead>
+              <tbody>
+                <tr v-for="product in products" :key="product.id" class="cursor-pointer" :class="{'row-done':countedIds.has(product.id)}" @click="openCount(product)">
+                  <td class="c-img"><q-avatar rounded size="26px" color="grey-2"><img v-if="product.foto" :src="photoUrl(product.foto)"/><q-icon v-else name="inventory_2" size="15px" color="grey-5"/></q-avatar></td>
+                  <td class="c-code">{{product.codigo}}</td>
+                  <td class="c-name">{{product.nombre}}</td>
+                  <td class="c-unit">{{product.unidad}}</td>
+                  <td class="c-stock">{{qty(countedOf(product)?systemStock(countedOf(product)):product.stock_inicial,product.unidad)}}</td>
+                  <td class="c-stock c-counted">{{countedOf(product)?qty(countedOf(product).cantidad,product.unidad):'—'}}</td>
+                  <td class="c-stock"><span v-if="countedOf(product)" :class="`text-${diffColor(countedOf(product))}`">{{diffLabel(countedOf(product))}}</span><span v-else class="text-grey-5">—</span></td>
+                  <td class="c-done"><q-icon v-if="countedIds.has(product.id)" name="task_alt" color="positive" size="16px"><q-tooltip>Ya contado</q-tooltip></q-icon></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <q-separator/>
           <q-card-actions class="row items-center justify-between q-px-sm">
-            <span class="text-caption text-grey-7">{{productsFrom}}–{{productsTo}} de {{productsTotal}}</span>
-            <q-pagination v-model="productsPage" :max="productsLastPage" :max-pages="5" boundary-numbers direction-links color="primary" size="sm" @update:model-value="loadProducts"/>
+            <div class="row items-center no-wrap q-gutter-x-sm">
+              <q-select v-model="productsPerPage" :options="perPageOptions" emit-value map-options dense outlined options-dense class="per-page" @update:model-value="changePerPage"/>
+              <span class="text-caption text-grey-7">{{productsFrom}}–{{productsTo}} de {{productsTotal}}</span>
+            </div>
+            <q-pagination v-if="productsLastPage>1" v-model="productsPage" :max="productsLastPage" :max-pages="5" boundary-numbers direction-links color="primary" size="sm" @update:model-value="loadProducts"/>
           </q-card-actions>
         </q-card>
       </div>
@@ -63,19 +74,23 @@
               <q-item-section>
                 <q-item-label lines="1" class="text-caption text-weight-bold">{{item.nombre}}</q-item-label>
                 <q-item-label caption class="count-meta">
-                  Sistema {{qty(systemStock(item),item.unidad)}} · Contado <b>{{qty(item.cantidad,item.unidad)}}</b>
+                  Sistema {{qty(systemStock(item),item.unidad)}} · Total contado <b>{{qty(item.cantidad,item.unidad)}}</b>
                 </q-item-label>
                 <q-item-label v-if="item.conteos?.length" caption class="count-lots">
                   <q-badge v-for="lot in item.conteos" :key="lot.id" outline color="deep-orange" class="q-mr-xs"
                            :label="`${lot.lote||'sin lote'} · ${qty(lot.cantidad,item.unidad)}${lot.fecha_vencimiento?' · vence '+shortDate(lot.fecha_vencimiento):''}`"/>
                 </q-item-label>
-                <q-item-label caption class="text-grey-6">Contó {{item.usuario_nombre||'—'}}</q-item-label>
+                <q-item-label caption class="count-users">
+                  <q-badge v-for="u in item.usuarios||[]" :key="u.id" :color="isMine(u)?'primary':'grey-3'" :text-color="isMine(u)?'white':'grey-9'" class="q-mr-xs"
+                           :label="`${isMine(u)?'TÚ':u.usuario_nombre} ${qty(u.cantidad,item.unidad)}`"/>
+                  <span v-if="!(item.usuarios||[]).length" class="text-grey-6">Contó {{item.usuario_nombre||'—'}}</span>
+                </q-item-label>
               </q-item-section>
               <q-item-section side>
                 <div class="row items-center no-wrap">
                   <q-badge :color="diffColor(item)" :label="diffLabel(item)" class="q-mr-xs"/>
-                  <q-btn v-if="editable" dense flat round size="sm" icon="edit" color="primary" @click="openCount(null,item)"/>
-                  <q-btn v-if="editable" dense flat round size="sm" icon="delete" color="negative" @click="removeItem(item)"/>
+                  <q-btn v-if="editable" dense flat round size="sm" :icon="myCount(item)?'edit':'add'" color="primary" @click="openCount(null,item)"><q-tooltip>{{myCount(item)?'Corregir tu conteo':'Agregar tu conteo'}}</q-tooltip></q-btn>
+                  <q-btn v-if="editable" dense flat round size="sm" icon="delete" color="negative" @click="removeItem(item)"><q-tooltip>{{myCount(item)?'Quitar tu conteo':'Quitar el producto'}}</q-tooltip></q-btn>
                 </div>
               </q-item-section>
             </q-item>
@@ -108,8 +123,13 @@
               <q-space/>
               <div class="text-right"><div class="text-caption text-grey-7">Diferencia</div><div v-if="quantityEntered" class="text-h6 text-weight-bold" :class="formDifference>0?'text-positive':formDifference<0?'text-negative':'text-grey-7'">{{formDifference>0?'+':''}}{{formDifference.toFixed(form.unidad==='KG'?3:0)}}</div><div v-else class="text-h6 text-weight-bold text-grey-5">—</div></div>
             </div>
-            <q-input v-if="!form.conteos.length" ref="quantityInput" v-model.number="form.cantidad" autofocus outlined dense type="number" min="0" :step="form.unidad==='KG'?0.001:1" label="Cantidad contada *" placeholder="¿Cuánto hay en la tienda?" class="col-12" input-class="text-h5 text-weight-bold" @focus="$event.target.select()"><template #prepend><q-icon name="scale"/></template></q-input>
-            <div v-else class="col-12 row items-center q-pa-sm rounded-borders bg-orange-1 text-orange-10"><span>Cantidad contada (suma de los lotes)</span><q-space/><b class="text-h6">{{qty(form.cantidad,form.unidad)}}</b></div>
+            <div v-if="form.otros.length" class="col-12 q-pa-sm rounded-borders others-box">
+              <div class="text-caption text-weight-bold text-grey-8 q-mb-xs"><q-icon name="groups" size="16px"/> Ya contaron este producto (se suma con lo tuyo)</div>
+              <div v-for="o in form.otros" :key="o.id" class="row items-center text-caption"><q-icon name="person" size="14px" class="q-mr-xs" color="grey-7"/>{{o.usuario_nombre}}<q-space/><b>{{qty(o.cantidad,form.unidad)}}</b></div>
+            </div>
+            <q-input v-if="!form.conteos.length" ref="quantityInput" v-model.number="form.cantidad" autofocus outlined dense type="number" min="0" :step="form.unidad==='KG'?0.001:1" :label="form.otros.length?'Lo que contaste tú *':'Cantidad contada *'" placeholder="¿Cuánto hay en la tienda?" class="col-12" input-class="text-h5 text-weight-bold" @focus="$event.target.select()"><template #prepend><q-icon name="scale"/></template></q-input>
+            <div v-else class="col-12 row items-center q-pa-sm rounded-borders bg-orange-1 text-orange-10"><span>Lo que contaste tú (suma de los lotes)</span><q-space/><b class="text-h6">{{qty(form.cantidad,form.unidad)}}</b></div>
+            <div v-if="form.otros.length" class="col-12 row items-center q-pa-sm rounded-borders bg-blue-1 text-blue-10"><span>Total del producto (todos)</span><q-space/><b class="text-h6">{{qty(formTotal,form.unidad)}}</b></div>
 
             <div class="col-12">
               <div class="row items-center q-mb-xs"><div class="text-caption text-weight-bold text-grey-8">Lotes y vencimientos</div><q-space/><q-btn dense flat no-caps size="sm" color="primary" icon="add" label="Agregar lote" @click="addLot"/></div>
@@ -162,9 +182,12 @@ const items=ref([]),refreshing=ref(false),refreshedAt=ref(null),savingLine=ref(f
 const itemsPage=ref(1),itemsLastPage=ref(1),itemsTotal=ref(0),itemsFrom=ref(0),itemsTo=ref(0),itemsSearch=ref(''),itemsPerPage=20
 const countedByProduct=ref({})
 const products=ref([]),categories=ref([]),search=ref(''),category=ref(null),searchInput=ref(null),loadingProducts=ref(false)
-const productsPage=ref(1),productsLastPage=ref(1),productsTotal=ref(0),productsFrom=ref(0),productsTo=ref(0),productsPerPage=18
+const productsPage=ref(1),productsLastPage=ref(1),productsTotal=ref(0),productsFrom=ref(0),productsTo=ref(0)
+// Productos por página: "Todos" pide el máximo que entrega el API (500); si hay más, sigue la paginación.
+const PER_PAGE_KEY='inventarioPorPaginaBajoCero',perPageOptions=[{label:'20 por página',value:20},{label:'50 por página',value:50},{label:'100 por página',value:100},{label:'Todos',value:500}]
+const productsPerPage=ref(perPageOptions.some(o=>o.value===Number(localStorage.getItem(PER_PAGE_KEY)))?Number(localStorage.getItem(PER_PAGE_KEY)):20)
 const countDialog=ref(false),scannerDialog=ref(false),scannerError=ref('')
-const form=reactive({detalle_id:null,producto_id:null,codigo:'',nombre:'',unidad:'UNIDAD',foto:null,stock_sistema:0,cantidad:0,observacion:'',conteos:[]})
+const form=reactive({detalle_id:null,producto_id:null,codigo:'',nombre:'',unidad:'UNIDAD',foto:null,stock_sistema:0,cantidad:0,observacion:'',conteos:[],otros:[]})
 let productsSearchTimer=null,itemsSearchTimer=null,refreshTimer=null,scanner=null,scanHandled=false
 const photoUrl=path=>`${proxy.$imgBase}/images/${path}`
 const qty=(value,unit)=>Number(value||0).toFixed(unit==='KG'?3:0)
@@ -172,6 +195,7 @@ const shortDate=value=>value?new Date(`${String(value).slice(0,10)}T12:00:00`).t
 const editable=computed(()=>header.estado==='BORRADOR')
 const stateColor=computed(()=>header.estado==='APLICADO'?'positive':header.estado==='ANULADO'?'grey-6':'orange')
 // Las marcas de "ya contado" de la grilla se piden sólo para los productos de la página visible.
+const countedOf=p=>countedByProduct.value[p.id]||items.value.find(i=>i.producto_id===p.id)||null
 const countedIds=computed(()=>new Set([...Object.keys(countedByProduct.value).map(Number),...items.value.map(i=>i.producto_id)]))
 const refreshedLabel=computed(()=>refreshedAt.value?`Actualizado ${refreshedAt.value.toLocaleTimeString('es-BO')}`:'')
 // stock_actual lo calcula el backend con el stock vivo del producto (o el guardado al contar si ya no existe).
@@ -180,12 +204,18 @@ const difference=item=>Number((Number(item.cantidad||0)-systemStock(item)).toFix
 const diffLabel=item=>{const d=difference(item);return `${d>0?'+':''}${d.toFixed(item.unidad==='KG'?3:0)}`}
 const diffColor=item=>{const d=difference(item);return Math.abs(d)<0.0005?'grey-6':d>0?'positive':'negative'}
 const quantityEntered=computed(()=>form.cantidad!==null&&form.cantidad!=='')
-const formDifference=computed(()=>Number((Number(form.cantidad||0)-Number(form.stock_sistema||0)).toFixed(3)))
+// Cada persona guarda su propio conteo; el producto suma lo de todos y eso se compara con el sistema.
+const meId=computed(()=>proxy.$store.user?.id)
+const isMine=u=>u.user_id&&u.user_id===meId.value
+const myCount=item=>(item.usuarios||[]).find(isMine)||null
+const formTotal=computed(()=>Number((form.otros.reduce((s,o)=>s+Number(o.cantidad||0),0)+Number(form.cantidad||0)).toFixed(3)))
+const formDifference=computed(()=>Number((formTotal.value-Number(form.stock_sistema||0)).toFixed(3)))
 
 async function loadProducts(){
   loadingProducts.value=true
   try{
-    const {data}=await proxy.$axios.get('/productos',{params:{q:search.value,categoria_id:category.value?.id,per_page:productsPerPage,page:productsPage.value}})
+    const [sortBy,sortDir]=sortOrder.value.split(':')
+    const {data}=await proxy.$axios.get('/productos',{params:{q:search.value,categoria_id:category.value?.id,sort_by:sortBy,sort_dir:sortDir,per_page:productsPerPage.value,page:productsPage.value}})
     products.value=data.data;productsLastPage.value=data.last_page||1;productsTotal.value=data.total||0;productsFrom.value=data.from||0;productsTo.value=data.to||0
     loadCounted()
   }catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudieron cargar los productos')}
@@ -193,9 +223,11 @@ async function loadProducts(){
 }
 async function loadCounted(){
   const ids=products.value.map(p=>p.id);if(!ids.length){countedByProduct.value={};return}
+  // El API devuelve hasta 100 detalles por consulta: con 500 productos en pantalla se pide por bloques de 100.
   try{
-    const {data}=await proxy.$axios.get(`/almacenes/${id}/detalles`,{params:{producto_ids:ids,per_page:100}})
-    countedByProduct.value=Object.fromEntries((data.data||[]).map(d=>[d.producto_id,d]))
+    const chunks=[];for(let i=0;i<ids.length;i+=100)chunks.push(ids.slice(i,i+100))
+    const pages=await Promise.all(chunks.map(c=>proxy.$axios.get(`/almacenes/${id}/detalles`,{params:{producto_ids:c,per_page:100}})))
+    countedByProduct.value=Object.fromEntries(pages.flatMap(r=>r.data.data||[]).map(d=>[d.producto_id,d]))
   }catch(e){/* sólo son las marcas de la grilla */}
 }
 async function loadItems(silent=false){
@@ -212,6 +244,22 @@ async function loadItems(silent=false){
 function handleItemsSearch(){clearTimeout(itemsSearchTimer);itemsSearchTimer=setTimeout(()=>{itemsPage.value=1;loadItems()},300)}
 function afterChange(){loadItems(true);loadCounted()}
 function resetProductsPage(){productsPage.value=1;loadProducts()}
+// Orden de la tabla para contar: se recuerda en el equipo para que cada persona siga con su forma de recorrer la tienda.
+const SORT_KEY='inventarioOrdenBajoCero'
+const sortOptions=[
+  {label:'Nombre (A → Z)',value:'nombre:asc'},{label:'Nombre (Z → A)',value:'nombre:desc'},{label:'Código',value:'codigo:asc'},
+  {label:'Categoría',value:'categoria:asc'},{label:'Unidad (KG juntos)',value:'unidad:asc'},
+  {label:'Mayor stock primero',value:'stock_inicial:desc'},{label:'Menor stock primero',value:'stock_inicial:asc'},
+  {label:'Precio venta: mayor primero',value:'precio_venta:desc'},{label:'Precio venta: menor primero',value:'precio_venta:asc'},
+  {label:'Costo: mayor primero',value:'precio_compra:desc'},{label:'Más recientes',value:'created_at:desc'}
+]
+const sortOrder=ref(sortOptions.some(o=>o.value===localStorage.getItem(SORT_KEY))?localStorage.getItem(SORT_KEY):'nombre:asc')
+function changePerPage(value){localStorage.setItem(PER_PAGE_KEY,value);resetProductsPage()}
+// Clic en el encabezado: ordena por esa columna; otro clic invierte el sentido. Queda sincronizado con "Ordenar por".
+const sortColumns=[{field:'codigo',label:'Código',cls:'c-code'},{field:'nombre',label:'Producto',cls:''},{field:'unidad',label:'Unidad',cls:'c-unit'},{field:'stock_inicial',label:'Sistema',cls:'c-stock'}]
+const sortField=computed(()=>sortOrder.value.split(':')[0]),sortDir=computed(()=>sortOrder.value.split(':')[1])
+function sortByColumn(field){const value=sortField.value===field?`${field}:${sortDir.value==='asc'?'desc':'asc'}`:`${field}:${field==='stock_inicial'?'desc':'asc'}`;sortOrder.value=value;changeSort(value)}
+function changeSort(value){localStorage.setItem(SORT_KEY,value);resetProductsPage()}
 function handleSearchInput(){clearTimeout(productsSearchTimer);productsSearchTimer=setTimeout(resetProductsPage,250)}
 function focusSearch(){setTimeout(()=>searchInput.value?.focus(),50)}
 async function openExact(value){
@@ -223,10 +271,11 @@ async function openExact(value){
   search.value='';resetProductsPage();openCount(product)
 }
 // Abre el conteo desde la grilla (producto) o desde una línea ya cargada (detalle).
-// Si el producto ya se contó, se recupera tal cual quedó: cantidad, lotes y vencimientos.
+// Se edita sólo el conteo propio (cantidad, lotes y vencimientos); lo de los demás se muestra aparte.
 function openCount(product,detail=null){
   if(!editable.value)return
   const counted=detail||countedByProduct.value[product.id]||items.value.find(i=>i.producto_id===product.id)
+  const mine=counted?myCount(counted):null
   Object.assign(form,{
     detalle_id:counted?.id||null,
     producto_id:counted?.producto_id||product.id,
@@ -235,10 +284,11 @@ function openCount(product,detail=null){
     unidad:counted?.unidad||product.unidad,
     foto:counted?.foto??product?.foto??null,
     stock_sistema:counted?systemStock(counted):Number(product.stock_inicial||0),
-    // Un producto nuevo arranca en blanco: se escribe lo que realmente hay en la tienda.
-    cantidad:counted?Number(counted.cantidad):null,
-    observacion:counted?.observacion||'',
-    conteos:(counted?.conteos||[]).map(c=>({lote:c.lote||'',fecha_vencimiento:c.fecha_vencimiento?String(c.fecha_vencimiento).slice(0,10):'',cantidad:Number(c.cantidad)}))
+    // Si todavía no contaste este producto arrancas en blanco: se escribe lo que realmente hay en tu sector.
+    cantidad:mine?Number(mine.cantidad):null,
+    observacion:mine?.observacion||'',
+    conteos:(mine?.conteos||[]).map(c=>({lote:c.lote||'',fecha_vencimiento:c.fecha_vencimiento?String(c.fecha_vencimiento).slice(0,10):'',cantidad:Number(c.cantidad)})),
+    otros:(counted?.usuarios||[]).filter(u=>!isMine(u))
   })
   countDialog.value=true
 }
@@ -262,33 +312,26 @@ async function saveCount(){
   if(!quantityEntered.value||!(Number(form.cantidad)>=0))return proxy.$alert.error('Ingresa la cantidad contada')
   savingLine.value=true
   try{
-    if(form.detalle_id)await proxy.$axios.put(`/almacenes/${id}/detalles/${form.detalle_id}`,linePayload())
-    else await proxy.$axios.post(`/almacenes/${id}/detalles`,linePayload())
-    proxy.$alert.success(`${form.nombre} registrado`)
+    // El backend guarda (o reemplaza) sólo el conteo de quien envía; lo de los demás se suma.
+    const {data}=await proxy.$axios.post(`/almacenes/${id}/detalles`,linePayload())
+    proxy.$alert.success(`${form.nombre} registrado`,(data.usuarios||[]).length>1?`Total entre ${data.usuarios.length} personas: ${qty(data.cantidad,form.unidad)}`:'')
     countDialog.value=false
     afterChange()
   }catch(e){
-    // 409: otra persona ya contó este producto en esta revisión.
-    if(e.response?.status===409)return askReplace(e.response.data.message)
     proxy.$alert.error(Object.values(e.response?.data?.errors||{})[0]?.[0]||e.response?.data?.message||'No se pudo guardar el producto')
   }finally{savingLine.value=false}
 }
-function askReplace(message){
-  proxy.$alert.dialog(`${message}. ¿Reemplazas ese conteo con el tuyo?`).onOk(async()=>{
-    savingLine.value=true
-    try{
-      await proxy.$axios.post(`/almacenes/${id}/detalles`,linePayload({reemplazar:true}))
-      proxy.$alert.success(`${form.nombre} actualizado`)
-      countDialog.value=false
-      afterChange()
-    }catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo guardar el producto')}
-    finally{savingLine.value=false}
-  })
-}
+// Quita tu conteo (lo de los demás queda); si no contaste ese producto, quita el producto completo.
 function removeItem(item){
-  proxy.$alert.dialog(`¿Quitar ${item.nombre} de la revisión?`).onOk(async()=>{
-    try{await proxy.$axios.delete(`/almacenes/${id}/detalles/${item.id}`);proxy.$alert.success('Producto quitado');afterChange()}
-    catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo quitar el producto')}
+  const mine=myCount(item),others=(item.usuarios||[]).filter(u=>!isMine(u)).length
+  const message=mine
+    ?`¿Quitar tu conteo de ${item.nombre} (${qty(mine.cantidad,item.unidad)})?${others?' Lo que contaron los demás se mantiene.':''}`
+    :`¿Quitar ${item.nombre} de la revisión?${others?` Se borran los conteos de ${others} persona${others===1?'':'s'}.`:''}`
+  proxy.$alert.dialog(message).onOk(async()=>{
+    try{
+      await proxy.$axios.delete(mine?`/almacenes/${id}/detalles/${item.id}/usuarios/${mine.id}`:`/almacenes/${id}/detalles/${item.id}`)
+      proxy.$alert.success(mine?'Tu conteo fue quitado':'Producto quitado');afterChange()
+    }catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo quitar')}
   })
 }
 function openScanner(){scannerError.value='';scanHandled=false;scannerDialog.value=true}
@@ -335,13 +378,17 @@ onBeforeUnmount(()=>{clearTimeout(productsSearchTimer);clearTimeout(itemsSearchT
 
 <style scoped>
 .product-loading{min-height:280px}
-.product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:5px;max-height:calc(100vh - 300px);overflow:auto}
-.product-card{overflow:hidden}.product-card:hover{border-color:#f57c00;background:#fffaf5}.product-card--done{border-color:#21ba45;background:#f3fbf5}
-.product-image{position:relative;height:54px;background:#fffaf3;display:flex;align-items:center;justify-content:center}.product-image img{width:100%;height:100%;object-fit:contain}
-.done-mark{position:absolute;top:2px;right:2px;background:#fff;border-radius:50%}
-.product-name{height:30px;font-size:11px;line-height:15px}.product-meta{font-size:9px;line-height:13px;white-space:nowrap;overflow:hidden}
+.product-grid{max-height:calc(100vh - 300px);overflow:auto}.per-page{width:130px}
+.th-sort{cursor:pointer;user-select:none;white-space:nowrap}.product-table th.th-sort:hover{color:#e65100;background:#ffe0b2}.th-sort .q-icon{opacity:.45}.product-table th.th-active{color:#e65100}.th-active .q-icon{opacity:1}.per-page :deep(.q-field__native){font-size:12px}
+.product-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
+.product-table th{position:sticky;top:0;z-index:1;background:#f5f5f5;color:#616161;font-size:10px;font-weight:600;text-transform:uppercase;text-align:left;padding:4px 6px;border-bottom:1px solid #e0e0e0}
+.product-table td{padding:2px 6px;border-bottom:1px solid #eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;height:32px}
+.product-table tbody tr:nth-child(even){background:#fafafa}.product-table tbody tr:hover{background:#fff3e0}.product-table tr.row-done{background:#f1f8f2}
+.c-img{width:38px}.c-code{width:84px;color:#616161}.product-table td.c-name{font-weight:600;font-size:10px;line-height:.8;white-space:normal;overflow:visible;text-overflow:clip;word-break:break-word;padding-top:3px;padding-bottom:3px}.c-unit{width:62px;color:#616161}.c-stock{width:70px;text-align:right!important;font-weight:700}.c-counted{color:#1565c0}.c-done{width:28px;text-align:center}
 .count-list{max-height:calc(100vh - 250px);overflow:auto}.count-thumb{min-width:38px;padding-right:6px}.count-meta{font-size:11px;line-height:14px}
 .count-lots{margin-top:2px;line-height:16px}
+.count-users{margin-top:2px;line-height:18px}
+.others-box{background:#f5f7fa;border:1px dashed #cfd8dc}
 .scanner-box{width:100%;min-height:260px;background:#000;border-radius:6px;overflow:hidden}
 .lot-row{display:flex;align-items:center;gap:4px;margin-bottom:4px}
 .lot-input{height:28px;border:1px solid #cfd8dc;border-radius:4px;padding:2px 6px;font-size:12px;color:#263238;background:#fff;min-width:0;flex:1 1 auto}

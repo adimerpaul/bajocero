@@ -48,6 +48,39 @@ class ProductoController extends Controller
         );
     }
 
+    /**
+     * Datos para el Excel que arma el navegador por bloques: con 100 000 productos
+     * un solo archivo generado en PHP agota memoria y tiempo, así que el frontend
+     * pide página a página (mostrando el avance) y construye el libro él mismo.
+     * Cada fila va como arreglo compacto para que la respuesta pese lo mínimo.
+     */
+    public function exportData(Request $request)
+    {
+        $this->authorizeAction($request, 'Ver Productos');
+        $page = max((int) $request->input('page', 1), 1);
+        $size = min(max((int) $request->input('per_page', 5000), 100), 10000);
+        $query = $this->filteredQuery($request);
+        $total = $page === 1 ? (clone $query)->reorder()->count() : null;
+
+        $rows = $query->forPage($page, $size)->get()->map(fn ($p) => [
+            $p->codigo,
+            $p->codigo_barras,
+            $p->nombre,
+            $p->categoriaRelacion?->nombre ?? $p->categoria,
+            $p->unidad,
+            (float) $p->precio_compra,
+            (float) $p->precio_venta,
+            (float) $p->precio_1,
+            (float) $p->precio_2,
+            (float) $p->precio_3,
+            (float) $p->precio_4,
+            (float) $p->precio_5,
+            (float) $p->stock_inicial,
+        ]);
+
+        return response()->json(['page' => $page, 'per_page' => $size, 'total' => $total, 'data' => $rows]);
+    }
+
     public function exportPdf(Request $request)
     {
         $this->authorizeAction($request, 'Ver Productos');
@@ -497,6 +530,8 @@ class ProductoController extends Controller
 
     private function validatedData(Request $request, ?Producto $producto = null): array
     {
+        // Al editar, precios y stock pueden omitirse (p. ej. desde el carrito de compras) y se conservan los actuales.
+        $required = $producto ? ['sometimes', 'required'] : ['required'];
         $data = $request->validate([
             'codigo' => ['required', 'string', 'max:50', Rule::unique('productos')->whereNull('deleted_at')->ignore($producto)],
             'codigo_barras' => ['nullable', 'string', 'max:100', Rule::unique('productos')->whereNull('deleted_at')->ignore($producto)],
@@ -504,14 +539,14 @@ class ProductoController extends Controller
             'categoria' => ['nullable', 'string', 'max:100'],
             'categoria_id' => ['nullable', 'exists:categorias,id'],
             'unidad' => ['required', 'string', 'max:20'],
-            'precio_compra' => ['required', 'numeric', 'min:0'],
-            'precio_venta' => ['required', 'numeric', 'min:0'],
+            'precio_compra' => [...$required, 'numeric', 'min:0'],
+            'precio_venta' => [...$required, 'numeric', 'min:0'],
             'precio_1' => ['nullable', 'numeric', 'min:0'],
             'precio_2' => ['nullable', 'numeric', 'min:0'],
             'precio_3' => ['nullable', 'numeric', 'min:0'],
             'precio_4' => ['nullable', 'numeric', 'min:0'],
             'precio_5' => ['nullable', 'numeric', 'min:0'],
-            'stock_inicial' => ['required', 'numeric', 'min:0', 'decimal:0,3'],
+            'stock_inicial' => [...$required, 'numeric', 'min:0', 'decimal:0,3'],
         ]);
         foreach (['codigo', 'nombre', 'categoria', 'unidad'] as $field) {
             $data[$field] = isset($data[$field]) && $data[$field] !== null
@@ -522,9 +557,12 @@ class ProductoController extends Controller
         }
         foreach (self::ESCALA_PRECIOS as $nivel => $factor) {
             $campo = "precio_{$nivel}";
+            if (! array_key_exists('precio_venta', $data) && ! array_key_exists($campo, $data)) {
+                continue;
+            }
             $data[$campo] = isset($data[$campo]) && $data[$campo] !== ''
                 ? round((float) $data[$campo], 2)
-                : round((float) $data['precio_venta'] * $factor, 2);
+                : round((float) ($data['precio_venta'] ?? $producto?->precio_venta) * $factor, 2);
         }
 
         return $data;

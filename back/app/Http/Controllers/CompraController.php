@@ -86,6 +86,7 @@ class CompraController extends Controller
             'detalles.*.producto_id' => ['required', 'exists:productos,id'],
             'detalles.*.cantidad' => ['required', 'numeric', 'min:0.001', 'decimal:0,3'],
             'detalles.*.precio_unitario' => ['required', 'numeric', 'min:0'],
+            'detalles.*.precio_venta' => ['nullable', 'numeric', 'min:0'],
             'detalles.*.lote' => ['nullable', 'string', 'max:100'],
             'detalles.*.fecha_vencimiento' => ['nullable', 'date'],
         ]);
@@ -130,7 +131,16 @@ class CompraController extends Controller
                     'cantidad_inicial' => $quantity, 'cantidad_disponible' => $quantity,
                 ]);
                 $product->increment('stock_inicial', $quantity);
-                $product->update(['precio_compra' => $unitPrice]);
+                $changes = ['precio_compra' => $unitPrice];
+                $salePrice = isset($item['precio_venta']) ? round((float) $item['precio_venta'], 2) : null;
+                if ($salePrice !== null && abs($salePrice - (float) $product->precio_venta) > 0.0001) {
+                    // Nuevo precio de venta desde la compra: los niveles de precio se recalculan con la misma escala que en productos.
+                    $changes['precio_venta'] = $salePrice;
+                    foreach ([1 => 0.80, 2 => 0.85, 3 => 0.90, 4 => 0.95, 5 => 1.00] as $nivel => $factor) {
+                        $changes["precio_{$nivel}"] = round($salePrice * $factor, 2);
+                    }
+                }
+                $product->update($changes);
             }
 
             return $purchase;
@@ -154,27 +164,6 @@ class CompraController extends Controller
         });
 
         return response()->json($compra->fresh());
-    }
-
-    public function vencimientos(Request $request)
-    {
-        $this->authorizeAction($request, 'Ver Compras');
-        $status = $request->input('estado', 'por_vencer');
-        $days = min(max((int) $request->input('dias', 30), 1), 365);
-        $query = Lote::with('producto:id,codigo,nombre,unidad')
-            ->where('cantidad_disponible', '>', 0)->whereNotNull('fecha_vencimiento');
-        if ($status === 'vencido') {
-            $query->whereDate('fecha_vencimiento', '<', today());
-        } else {
-            $query->whereDate('fecha_vencimiento', '>=', today())
-                ->whereDate('fecha_vencimiento', '<=', today()->addDays($days));
-        }
-
-        return response()->json($query->orderBy('fecha_vencimiento')->get()->map(function ($lot) {
-            $lot->dias_vencimiento = today()->diffInDays($lot->fecha_vencimiento, false);
-
-            return $lot;
-        }));
     }
 
     private function authorizeAction(Request $request, string $permission): void

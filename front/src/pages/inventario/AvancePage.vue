@@ -12,6 +12,7 @@
       </div>
       <q-space/>
       <q-btn v-if="editable" dense flat icon="fact_check" label="Seguir llenando" no-caps class="q-mr-xs" :to="`/inventario/${id}`"/>
+      <q-btn dense flat color="positive" icon="table_view" label="Excel" no-caps class="q-mr-xs" :disable="!data.revisados" @click="downloadExcel"><q-tooltip>Conteo por persona, total y diferencia</q-tooltip></q-btn>
       <q-btn dense flat round icon="refresh" :loading="loading||loadingRows" class="q-mr-xs" @click="refresh()"><q-tooltip>Actualizar</q-tooltip></q-btn>
       <q-btn v-if="editable&&can('Aplicar Almacenes')" dense unelevated color="positive" icon="published_with_changes" label="Actualizar productos" no-caps :loading="applying" :disable="!data.revisados" @click="apply"/>
     </div>
@@ -30,7 +31,9 @@
     <q-card v-if="data.por_usuario?.length" flat bordered class="q-mb-sm">
       <q-card-section class="q-pa-sm row items-center">
         <div class="text-caption text-grey-7 q-mr-sm">Quién contó:</div>
-        <div class="row q-gutter-xs"><q-badge v-for="u in data.por_usuario" :key="u.usuario" outline color="primary" :label="`${u.usuario}: ${u.productos}`"/></div>
+        <div class="row q-gutter-xs"><q-chip v-for="u in data.por_usuario" :key="userKey(u)" dense square outline color="deep-orange" icon="person" :label="`${u.usuario} · ${u.productos} producto${u.productos===1?'':'s'}`"/></div>
+        <q-space/>
+        <div class="text-caption text-grey-6">Si varios cuentan el mismo producto, se suma lo de todos</div>
       </q-card-section>
     </q-card>
 
@@ -44,8 +47,11 @@
       <q-separator/>
       <q-table flat dense :rows="rows" :columns="columns" row-key="id" :loading="loadingRows" v-model:pagination="pagination" :rows-per-page-options="[25,50,100]" binary-state-sort @request="onRequest">
         <template #body-cell-producto="p"><q-td :props="p"><b>{{p.row.nombre}}</b><div class="text-caption text-grey-7">{{p.row.codigo}} · {{p.row.unidad}}</div></q-td></template>
+        <template v-for="u in users" :key="u.name" #[u.slot]="p"><q-td :props="p" class="text-right user-cell">
+          <template v-if="userQty(p.row,u)!==null">{{qty(userQty(p.row,u),p.row.unidad)}}</template><span v-else class="text-grey-5">—</span>
+        </q-td></template>
         <template #body-cell-sistema="p"><q-td :props="p" class="text-right">{{qty(p.row.stock_actual,p.row.unidad)}}</q-td></template>
-        <template #body-cell-contado="p"><q-td :props="p" class="text-right text-weight-bold">{{qty(p.row.cantidad,p.row.unidad)}}</q-td></template>
+        <template #body-cell-contado="p"><q-td :props="p" class="text-right text-weight-bold total-cell">{{qty(p.row.cantidad,p.row.unidad)}}</q-td></template>
         <template #body-cell-diferencia="p"><q-td :props="p" class="text-right"><q-badge :color="diffColor(p.row)" :label="diffLabel(p.row)"/></q-td></template>
         <template #body-cell-lote="p"><q-td :props="p">
           <div v-if="p.row.conteos?.length" class="lot-cell">
@@ -102,7 +108,7 @@
               <tr v-for="row in confirmRows" :key="row.id" :class="rowClass(row)">
                 <td>
                   <div class="text-weight-medium">{{row.nombre}}</div>
-                  <div class="text-caption text-grey-7">{{row.codigo}} · contó {{row.usuario_nombre||'—'}}</div>
+                  <div class="text-caption text-grey-7">{{row.codigo}} · {{countBreakdown(row)}}</div>
                   <div v-if="row.conteos?.length" class="text-caption text-deep-orange-9">{{lotSummary(row)}}</div>
                 </td>
                 <td class="text-right">{{qty(row.stock_actual,row.unidad)}}</td>
@@ -132,19 +138,24 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <ExportProgressDialog :state="xls" @cancel="xlsExport.cancel"/>
   </q-page>
 </template>
 
 <script setup>
 import { computed, getCurrentInstance, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { companyData } from 'src/addons/empresa'
+import { createExportState, exportErrorMessage, fetchInBlocks } from 'src/addons/exportProgress'
+import ExportProgressDialog from 'components/ExportProgressDialog.vue'
 const {proxy}=getCurrentInstance(),route=useRoute(),router=useRouter()
 const id=Number(route.params.id)
 const almacen=reactive({numero:'',estado:'BORRADOR',descripcion:'',aplicado_por_nombre:null,fecha_aplicado:null})
 const data=reactive({total_productos:0,revisados:0,con_diferencia:0,sin_diferencia:0,diferencia_valor:0,sobrantes:{count:0,total:0},faltantes:{count:0,total:0},por_usuario:[]})
 const loading=ref(false),applying=ref(false),onlyDifferences=ref(false),confirmDialog=ref(false),confirmAll=ref(false)
 // El detalle viaja paginado desde /detalles: el documento completo pesaba cientos de KB en cada refresco.
-const rows=ref([]),loadingRows=ref(false),rowsSearch=ref(''),pagination=ref({page:1,rowsPerPage:25,rowsNumber:0})
+const rows=ref([]),loadingRows=ref(false),rowsSearch=ref(''),pagination=ref({page:1,rowsPerPage:25,rowsNumber:0,sortBy:null,descending:false})
 const confirmRows=ref([]),loadingConfirm=ref(false),confirmPage=ref(1),confirmLastPage=ref(1),confirmTotal=ref(0)
 let refreshTimer=null,rowsSearchTimer=null
 const can=p=>proxy.$store.hasPermission(p),money=v=>Number(v||0).toFixed(2)
@@ -163,15 +174,20 @@ const fmt=value=>Number(value||0).toFixed(3).replace(/\.?0+$/,'')||'0'
 const rowValue=row=>Number((diff(row)*Number(row.precio_compra||0)).toFixed(2))
 const rowClass=row=>Math.abs(diff(row))<0.0005?'':diff(row)>0?'row-up':'row-down'
 const lotSummary=row=>(row.conteos||[]).map(l=>`${l.lote||'sin lote'}: ${qty(l.cantidad,row.unidad)}${l.fecha_vencimiento?` (vence ${shortDate(l.fecha_vencimiento)})`:''}`).join(' · ')
-const columns=[
-  {name:'producto',label:'Producto',field:'nombre',align:'left'},
-  {name:'usuario',label:'Contó',field:r=>r.usuario_nombre||'—',align:'left'},
-  {name:'sistema',label:'Sistema',field:'stock_actual',align:'right'},
-  {name:'contado',label:'Contado',field:'cantidad',align:'right'},
-  {name:'diferencia',label:'Diferencia',field:'diferencia_actual',align:'right'},
-  {name:'lote',label:'Lote / vencimiento',field:'lote',align:'left'},
-  {name:'resultado',label:'Stock resultante',field:'stock_nuevo',align:'right'}
-]
+// Una columna por persona que contó (como la planilla en papel) y el total es la suma de todas.
+const userKey=u=>u.user_id?`u${u.user_id}`:`n${u.usuario??u.usuario_nombre}`
+const users=computed(()=>[...(data.por_usuario||[])].sort((a,b)=>a.usuario.localeCompare(b.usuario)).map(u=>({...u,name:`user_${userKey(u)}`,slot:`body-cell-user_${userKey(u)}`})))
+const userQty=(row,u)=>{const found=(row.usuarios||[]).filter(c=>userKey(c)===userKey(u));return found.length?found.reduce((s,c)=>s+Number(c.cantidad||0),0):null}
+const countBreakdown=row=>(row.usuarios||[]).length?row.usuarios.map(u=>`${u.usuario_nombre} ${qty(u.cantidad,row.unidad)}`).join(' + '):`contó ${row.usuario_nombre||'—'}`
+const columns=computed(()=>[
+  {name:'producto',label:'Producto',field:'nombre',align:'left',sortable:true},
+  ...users.value.map(u=>({name:u.name,label:u.usuario,field:row=>userQty(row,u),align:'right',headerClasses:'user-head',sortable:true})),
+  {name:'contado',label:'Total contado',field:'cantidad',align:'right',headerClasses:'total-head',sortable:true},
+  {name:'sistema',label:'Sistema',field:'stock_actual',align:'right',sortable:true},
+  {name:'diferencia',label:'Diferencia',field:'diferencia_actual',align:'right',sortable:true},
+  {name:'lote',label:'Lote / vencimiento',field:'lote',align:'left',sortable:true},
+  {name:'resultado',label:'Stock resultante',field:'stock_nuevo',align:'right',sortable:true}
+])
 const detailParams=extra=>({orden:'nombre',...extra})
 
 async function load(){
@@ -188,14 +204,15 @@ async function load(){
 async function loadRows(silent=false){
   if(!silent)loadingRows.value=true
   try{
-    const {page,rowsPerPage}=pagination.value
-    const {data:res}=await proxy.$axios.get(`/almacenes/${id}/detalles`,{params:detailParams({page,per_page:rowsPerPage,q:rowsSearch.value||undefined,solo_diferencias:onlyDifferences.value?1:undefined})})
+    const {page,rowsPerPage,sortBy,descending}=pagination.value
+    // Clic en el encabezado: ordena en el servidor de menor a mayor / de mayor a menor (la tabla está paginada).
+    const {data:res}=await proxy.$axios.get(`/almacenes/${id}/detalles`,{params:detailParams({page,per_page:rowsPerPage,q:rowsSearch.value||undefined,solo_diferencias:onlyDifferences.value?1:undefined,ordenar:sortBy||undefined,direccion:sortBy?(descending?'desc':'asc'):undefined})})
     if(res.last_page&&page>res.last_page){pagination.value={...pagination.value,page:res.last_page};return loadRows(silent)}
     rows.value=res.data||[];pagination.value={...pagination.value,rowsNumber:res.total||0}
   }catch(e){if(!silent)proxy.$alert.error(e.response?.data?.message||'No se pudo cargar el detalle')}
   finally{loadingRows.value=false}
 }
-function onRequest(props){pagination.value={...pagination.value,page:props.pagination.page,rowsPerPage:props.pagination.rowsPerPage||25};loadRows()}
+function onRequest(props){const p=props.pagination,sortChanged=p.sortBy!==pagination.value.sortBy||p.descending!==pagination.value.descending;pagination.value={...pagination.value,page:sortChanged?1:p.page,rowsPerPage:p.rowsPerPage||25,sortBy:p.sortBy,descending:p.descending};loadRows()}
 function reloadRows(){pagination.value={...pagination.value,page:1};loadRows()}
 function handleRowsSearch(){clearTimeout(rowsSearchTimer);rowsSearchTimer=setTimeout(reloadRows,300)}
 async function loadConfirm(){
@@ -211,20 +228,46 @@ function apply(){confirmAll.value=false;confirmPage.value=1;confirmRows.value=[]
 async function runApply(){
   applying.value=true
   try{
-    await proxy.$axios.post(`/almacenes/${id}/aplicar`)
+    const {data}=await proxy.$axios.post(`/almacenes/${id}/aplicar`)
     confirmDialog.value=false
-    proxy.$alert.success('Productos actualizados con la revisión')
+    proxy.$alert.success('Productos actualizados con la revisión',data?.riesgo_agregados?`${data.riesgo_agregados} lote(s) con vencimiento reemplazan la lista de productos en riesgo`:'')
     await load();loadRows()
   }catch(e){proxy.$alert.error(e.response?.data?.message||'No se pudo actualizar los productos')}
   finally{applying.value=false}
 }
 function refresh(){load();loadRows()}
+// Excel con el formato de la planilla: producto, una columna por persona, total, sistema y diferencia.
+const xlsExport=createExportState('Exportando conteo a Excel','productos'),xls=xlsExport.state
+async function downloadExcel(){
+  const signal=xlsExport.start(2000)
+  try{
+    const {rows,first}=await fetchInBlocks(proxy.$axios,`/almacenes/${id}/exportar-datos`,{},{state:xls,signal,size:2000,parallel:2})
+    const [{buildInventarioExcel},{saveBlob,fileStamp}]=await Promise.all([import('src/addons/inventarioExcel'),import('src/addons/xlsx')])
+    const company=companyData(),now=new Date()
+    const estado=almacen.estado==='BORRADOR'?'EN REVISIÓN':almacen.estado
+    const blob=await buildInventarioExcel(rows,first.usuarios||[],{
+      empresa:(company.nombre_empresa||'Bajo Cero').toUpperCase(),
+      datos:[company.nit&&`NIT ${company.nit}`,company.direccion,company.telefono&&`Tel. ${company.telefono}`].filter(Boolean).join('  ·  '),
+      filtros:`Revisión ${almacen.numero} · ${estado}${almacen.descripcion?` · ${almacen.descripcion}`:''}${almacen.estado==='APLICADO'?` · aplicada por ${almacen.aplicado_por_nombre||'—'} el ${formatDate(almacen.fecha_aplicado)}`:''}`,
+      usuario:proxy.$store.user?.name||proxy.$store.user?.username||'-',
+      fecha:now.toLocaleString('es-BO'),
+      numero:almacen.numero,
+      totalProductos:data.total_productos
+    },{signal,onProgress:n=>{xls.generados=n}})
+    saveBlob(blob,`inventario_${almacen.numero||id}_${fileStamp(now)}.xlsx`)
+    xls.fase='listo'
+    proxy.$alert.success(`Excel generado con ${rows.length} productos`)
+  }catch(e){
+    if(signal.aborted){xls.open=false;proxy.$alert.info('Exportación cancelada')}
+    else xls.error=exportErrorMessage(e)
+  }finally{xlsExport.stop()}
+}
 onMounted(()=>{
   refresh()
   // Sólo se refrescan los totales y la página visible, no todo el documento.
   refreshTimer=setInterval(()=>{if(!document.hidden&&editable.value&&!applying.value&&!confirmDialog.value){load();loadRows(true)}},20000)
 })
-onBeforeUnmount(()=>{clearInterval(refreshTimer);clearTimeout(rowsSearchTimer)})
+onBeforeUnmount(()=>{clearInterval(refreshTimer);clearTimeout(rowsSearchTimer);xlsExport.dispose()})
 </script>
 
 <style scoped>
@@ -241,6 +284,8 @@ onBeforeUnmount(()=>{clearInterval(refreshTimer);clearTimeout(rowsSearchTimer)})
 .confirm-kpi__hint{display:block;font-size:10px;font-weight:500;color:#78909c;line-height:12px}
 .confirm-table{min-height:160px;position:relative}
 .search-box{width:220px;max-width:45vw}
+.user-cell{background:#fff8ee;color:#4e342e}.total-cell{background:#e8f1fb}
+:deep(.user-head){background:#ffe0b2;color:#4e342e;font-weight:700}:deep(.total-head){background:#e8f1fb;font-weight:700}
 .confirm-table tr.row-up td{background:#f4fbf5}.confirm-table tr.row-down td{background:#fff6f6}
 @media(max-width:700px){.confirm-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:900px){.kpi-row{grid-template-columns:repeat(2,minmax(0,1fr))}}
