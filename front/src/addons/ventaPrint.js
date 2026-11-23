@@ -2,6 +2,7 @@ import { Printd } from 'printd'
 import QRCode from 'qrcode'
 import { companyData, companyLogo } from './empresa'
 import { numeroALetras } from './numeroALetras'
+import { fichasPara, promocionesPara } from './promociones'
 
 const css = `
 @page{size:80mm auto;margin:4mm}body{margin:0}.ticket{font-family:Arial,sans-serif;font-size:11px;color:#111}
@@ -10,18 +11,75 @@ h2{text-align:center;margin:0}.center{text-align:center}.line{border-top:1px das
 table{width:100%;border-collapse:collapse}th,td{padding:2px;vertical-align:top}.right{text-align:right}.bold{font-weight:bold}
 .total{font-size:15px}.cancelled{font-size:28px;color:#c62828;text-align:center;font-weight:bold}
 .pending{border:1px dashed #c62828;color:#c62828;text-align:center;font-weight:bold;padding:3px;margin-top:4px}
+.cupon{border:1px dashed #111;padding:3px 5px;line-height:1.2}
+.cupon h1{font-size:15px;text-align:center;margin:1px 0}.cupon .sub{text-align:center;font-size:11px;font-weight:bold}
+.campo{display:flex;align-items:flex-end;margin-top:7px;font-size:11px;font-weight:bold}.campo span{flex:1;border-bottom:1px solid #111;height:13px;margin-left:4px}
 .small{font-size:9px}.cuf{word-break:break-all;font-size:10px}.qr{display:block;width:120px;height:120px;margin:4px auto}
 `
 const esc = value => String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
 const money = value => Number(value || 0).toFixed(2)
 const qty = item => item.unidad === 'KG' ? Number(item.cantidad).toFixed(3) : Number(item.cantidad).toFixed(0)
 
-/** Decide solo el formato: factura de Impuestos si la venta se facturó (tiene CUF), si no el comprobante. */
-export async function printSale (sale) {
+/**
+ * Decide solo el formato: factura de Impuestos si la venta se facturó (tiene CUF), si no el comprobante.
+ * Agrega las fichas de sorteo de cada promoción activa que alcanza el total (también al reimprimir);
+ * cada ficha sale tantas veces como `impresiones` tenga la promoción. Con `cupones: false` se omiten.
+ */
+export async function printSale (sale, { cupones = true } = {}) {
   const element = document.createElement('div')
   const factura = sale.tipo_comprobante === 'FACTURA' && sale.cuf
-  element.innerHTML = factura ? await invoiceHtml(sale) : receiptHtml(sale)
-  new Printd().print(element, [css])
+  const anulada = sale.estado === 'ANULADA'
+  const promos = cupones && !anulada ? promocionesPara(sale.total) : []
+  await printPieces([factura ? await invoiceHtml(sale) : receiptHtml(sale), ...promos.flatMap(p => couponsHtml(p, sale))])
+}
+
+/** Solo las fichas de sorteo de la venta (reimpresión desde el listado). Devuelve cuántas promociones alcanzó. */
+export function printCoupons (sale) {
+  const promos = sale.estado === 'ANULADA' ? [] : promocionesPara(sale.total)
+  if (!promos.length) return 0
+  printPieces(promos.flatMap(p => couponsHtml(p, sale)))
+  return promos.length
+}
+
+/**
+ * Cada pieza (comprobante, cada ficha) va en su propio trabajo de impresión:
+ * la ticketera corta el papel al terminar cada trabajo, así las fichas salen separadas.
+ */
+async function printPieces (pieces) {
+  for (const html of pieces) {
+    await new Promise(resolve => {
+      const element = document.createElement('div')
+      element.innerHTML = html
+      const printer = new Printd()
+      printer.print(element, [css], [], ({ iframe, launchPrint }) => {
+        launchPrint()
+        setTimeout(resolve, 400) // pausa para que el trabajo anterior llegue a la cola antes del siguiente
+        setTimeout(() => iframe.remove(), 60000)
+      })
+    })
+  }
+}
+
+/** Una ficha HTML por cada ficha ganada y cada copia. */
+function couponsHtml (promo, sale) {
+  const fichas = fichasPara(promo, sale.total)
+  const copias = Math.max(1, Number(promo.impresiones || 1))
+  const html = []
+  for (let f = 1; f <= fichas; f++) {
+    for (let c = 1; c <= copias; c++) html.push(couponHtml(promo, sale, { ficha: f, fichas, copia: c, copias }))
+  }
+  return html
+}
+
+/** Cupón para que el cliente anote sus datos y lo deposite en el ánfora del sorteo. */
+function couponHtml (promo, sale, { ficha, fichas, copia, copias }) {
+  const company = companyData()
+  return `<div class="ticket cupon"><div class="center bold">${esc(company.nombre_empresa||'Bajo Cero')}</div><h1>${esc(promo.titulo)}</h1>
+  ${promo.subtitulo ? `<div class="sub">${esc(promo.subtitulo)}</div>` : ''}
+  <div class="center bold">FICHA ${ficha} DE ${fichas}${copias > 1 ? ` · COPIA ${copia}/${copias}` : ''}</div>
+  <div class="center small">Compra ${esc(sale.numero)} · Bs ${money(sale.total)} · ${new Date(sale.fecha || Date.now()).toLocaleString('es-BO')}</div>
+  <div class="campo">NOMBRE:<span></span></div><div class="campo">CELULAR:<span></span></div>
+  <div class="center small" style="margin-top:4px">Llene sus datos y deposite este cupón en el ánfora. ¡Suerte!</div></div>`
 }
 
 function receiptHtml (sale) {

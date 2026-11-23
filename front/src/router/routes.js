@@ -23,6 +23,7 @@ const routes = [
       { path: 'inventario/:id(\\d+)', component: () => import('pages/inventario/LlenarPage.vue') },
       { path: 'inventario/:id(\\d+)/avance', component: () => import('pages/inventario/AvancePage.vue') },
       { path: 'configuracion', component: () => import('pages/configuracion/IndexPage.vue') },
+      { path: 'promociones', component: () => import('pages/promociones/IndexPage.vue') },
       { path: 'clientes', component: () => import('pages/clientes/IndexPage.vue') },
       { path: 'impuestos', component: () => import('pages/impuestos/IndexPage.vue') },
       { path: 'productos/por-vencer', component: () => import('pages/compras/VencimientosPage.vue'), props: { estado: 'por_vencer' } },
